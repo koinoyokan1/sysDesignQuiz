@@ -1,0 +1,593 @@
+
+What DB would you use for a URL shortener mapping shortUrl to longUrl? $$$$$ NoSQL KV store (DynamoDB, Cassandra, ScyllaDB) — no relations needed, horizontal scaling built in, Redis as cache in front.
+
+Should you hash the shortUrl if it's already randomly generated (e.g. abc123x)? $$$$$ No — random strings are already uniformly distributed. Hashing adds no benefit, only extra compute. Hash only when input has skew or sequentiality (e.g. auto-increment IDs).
+
+What is the partition key for the URL mapping table? $$$$$ shortUrl directly — high cardinality, uniform distribution, matches the primary query pattern (lookup by shortUrl).
+
+How do you enforce uniqueness of vanity/custom URLs in Cassandra? $$$$$ Use Cassandra Lightweight Transactions (LWT): INSERT IF NOT EXISTS. Uses Paxos under the hood for atomic check-and-insert. Caveat: 4x slower than regular writes due to Paxos round trips.
+
+Why use LWT only for vanity URLs and not random slugs? $$$$$ Vanity URL volume is low (users claim slugs rarely), so LWT cost is acceptable. Random slugs are high volume — LWT would be a bottleneck. Collision probability for random slugs is negligible with good hashing.
+
+What is the schema for storing a user's link history? $$$$$ Table: userShortUrl. Partition key: userId. Clustering key: createdAt DESC. Columns: shortUrl, longUrl, createdAt.
+
+How do you atomically write to urlMapping and userShortUrl tables when Cassandra doesn't support cross-table transactions?
+$$$$$
+Use the outbox pattern:
+1. Write to urlMapping + outbox table atomically (same partition key = same Cassandra logged batch)
+2. Publish pubsub message from outbox
+3. Async consumer writes to userShortUrl
+4. Use idempotency key = (userId, shortUrl) to handle at-least-once delivery
+
+
+What DB would you use for an append-only analytics table tracking URL clicks? $$$$$ Wide-column DB (Cassandra/ScyllaDB) — optimized for append-heavy writes, naturally sorted by clustering key, horizontal scaling built in.
+
+What is the partition key for a click events table? $$$$$ shortUrl — because the primary query is "clicks for a specific shortUrl over a time range." Partition key must match the WHERE clause of your most frequent query.
+
+Why not use eventId as the partition key for click events? $$$$$ eventId is never queried directly in analytics. To find clicks for a URL you'd scatter-gather across all partitions — essentially a full table scan. High cardinality of the right dimension (shortUrl) is what you need.
+
+How do you handle hot partitions for viral URLs in the analytics table?
+$$$$$
+Use composite partition key: (shortUrl, date, bucketId)
+- bucketId = random(0, N) at write time
+- At read time: scatter-gather across all N buckets in parallel
+- N is a fixed config value so reads are predictable (not unbounded)
+
+What is the full schema for the click events table?
+$$$$$
+Partition key: (shortUrl, date, bucketId)
+Clustering key: timestamp ASC
+Columns: country, device_type, timestamp
+Note: longUrl does NOT belong here — it belongs in the URL mapping table only.
+
+What is the general rule for choosing partition key vs clustering key? $$$$$ High cardinality → partition key (spreads data evenly). Low cardinality → clustering key (sorts/filters within a partition). Partition key = the first WHERE clause of your most frequent query.
+
+
+What DB and schema for storing messages?
+$$$$$
+Wide-column DB (Cassandra).
+Partition key: chatId
+Clustering key: timestamp ASC
+Columns: messageId, senderId, content, status, timestamp
+
+How do you generate chatId for a 1-1 conversation between users A and B deterministically? $$$$$ chatId = hash(min(userId1, userId2) + "|" + max(userId1, userId2)). Sort the two userIds, concatenate, hash. Deterministic, no coordination, no DB lookup needed.
+
+What is the schema for a user's inbox (list of conversations sorted by last activity)?
+$$$$$
+Partition key: userId
+Clustering key: lastMessageAt DESC
+Columns: chatId, participants, lastMessagePreview, lastMessageAt, authorName, authorAvatarUrl
+
+What is the schema for group message delivery receipts (per-member read status)?
+$$$$$
+Partition key: messageId
+Clustering key: userId
+Columns: status, updatedAt
+Rationale: Query is "how many members read message X" — single partition scan. messageId has billions of distinct values (good cardinality), userId has hundreds per message (good clustering).
+
+
+What is the schema for a posts table?
+$$$$$
+Wide-column DB (Cassandra).
+Partition key: userId (author)
+Clustering key: createdAt DESC
+Columns: postId, content, likeCount, createdAt
+
+Why is storing likeCount as a column in the posts table problematic? $$$$$ Cassandra uses last-write-wins. Concurrent like updates: two nodes both read 100, both write 101 — one like is lost. Use Redis INCR (atomic) for like counts, batch flush to Cassandra periodically. Enable Redis AOF for durability.
+
+What is the push vs pull hybrid approach for social feeds?
+$$$$$
+- Normal users (< ~10K followers): push posts to all followers' feed tables at write time (fanout on write)
+- Celebrity users (millions of followers): skip fanout, pull their posts at read time
+- At read time: k-way merge of pre-filled feed + celebrity posts using a min-heap, sorted by timestamp
+- Cache merged feed in Redis per userId
+
+What is the schema for a user's feed table?
+$$$$$
+Partition key: userId (the feed owner, not the author)
+Clustering key: lastMessageAt DESC
+Columns: postId, authorId, authorName, authorAvatarUrl, content, createdAt
+
+How do you handle inactive users (30+ days) in the feed system? $$$$$ Use pull method (k-way merge) for inactive users — don't fanout to their feed table. On return, absorb one-time latency hit to recompute feed (feed warming), then switch back to push for subsequent activity.
+
+
+What data structure do you use for a real-time top-100 leaderboard? $$$$$ Redis sorted set. ZADD is O(log N), ZRANGE is O(log N + elements). Purpose-built for leaderboards. Use atomic INCR for score updates.
+
+What is the schema for per-country leaderboards? $$$$$ One Redis sorted set per country: leaderboard:country:IN, leaderboard:country:US, leaderboard:global. On score update, consumer identifies player's country and updates both global and country-specific sorted sets.
+
+How do you serve mid-leaderboard queries (e.g. rank 5000-5100) efficiently? $$$$$ Pre-compute rank as a column in a relational DB via background job (runs every 60 seconds). Query: WHERE rank BETWEEN 5000 AND 5100. Accept rank staleness up to job interval — quantify the SLA (e.g. "rank accurate within 60 seconds").
+
+How do you handle a player changing country in the leaderboard system?
+$$$$$
+Trigger: user updates country in profile (not IP-based — VPNs/travel cause false positives).
+Migration sequence (atomic via Lua script):
+1. ZREM leaderboard:country:old playerId
+2. ZADD leaderboard:country:new <score> playerId
+3. Update country column in DB
+
+
+How do you store real-time driver locations for geo-radius queries?
+$$$$$
+Two Redis data structures:
+1. key: driverId → value: (lat, long, geohashCell, lastUpdatedAt) — for individual driver lookup
+2. key: geohash cell → value: set of driverIds in that cell — for radius queries (inverted index)
+On driver location update: atomically update both via Lua script.
+TTL: 10 minutes on driver records — auto-expire stale/offline drivers.
+
+What is the schema for the RiderTrips table?
+$$$$$
+Wide-column or relational DB.
+Partition key: riderId
+Clustering key: startTime DESC
+Columns: tripId, driverId, driverName, startLocation, endLocation, startTime, endTime, fare, status
+
+How do you handle the geohash boundary problem (driver 1.9km away but in adjacent cell)? $$$$$ Search current cell + 8 neighboring cells. Use dynamic geohash precision — denser cities (San Francisco) use higher precision (smaller cells), sparse areas (rural) use lower precision (larger cells).
+
+How do you implement expanding radius search for ride matching?
+$$$$$
+Continuous search loop with expanding radius (radar sweep, not one-shot):
+- Every 3 seconds: expand radius by 2km
+- Query all drivers within current radius
+- Exclude already-notified drivers (tracked in consideredDriverIds set)
+- Stop when match found, timeout reached, or radius > max
+- ETA-based cutoff (e.g. ETA > 15 min) not distance-based
+
+What is the schema for driver earnings cache?
+$$$$$
+Redis keys with TTL:
+- earnings:daily:driverId:2024-01-16 → total fare (TTL: 24 hours)
+- earnings:weekly:driverId:2024-W03 → total fare (TTL: 7 days)
+Dated keys + TTL = auto-expiry, no reset job needed, constant cache size.
+Update via Redis INCR on trip completion. Cache miss → query DB → populate cache.
+
+
+
+How many GPS writes/second does Uber need to handle with 5M active drivers updating every 5 seconds? $$$$$ 5M / 5 = 1M writes/second average. Design for 3x peak = 3M writes/second. At 500K writes/node = 6 nodes minimum, round up to 10 for headroom. With RF=3, that's 30 physical nodes.
+
+How much storage does Uber's GPS data require per day and per year?
+$$$$$
+Per row: 40 bytes (tripId 16 + timestamp 8 + lat 8 + long 8).
+Per day: 1M writes/sec × 86,400 sec = 86B rows × 40 bytes = ~3.4TB × 3 (RF) = ~10TB/day.
+Per year: 10TB × 365 = ~3.5PB/year.
+This justifies tiered storage: keep 7 days in Cassandra (~70TB), move older data to GCS/S3 (~12x cheaper).
+
+How many Cassandra nodes do you need to store 1 year of GPS data (2TB SSD per node)?
+$$$$$
+10TB/day ÷ 2TB/node = 5 nodes/day.
+5 nodes/day × 365 days = 1,825 ≈ 2,000 nodes.
+Cost: ~$10M/year. GCS alternative: ~$840K/year. → Use tiered storage.
+
+Key constants to memorize:
+$$$$$
+Seconds in a day: 86,400 ≈ 100K
+Days in a year: 365 ≈ 400
+1MB = 10^6 bytes
+1GB = 10^9 bytes
+1TB = 10^12 bytes
+1PB = 10^15 bytes
+Always use p95/p99 not averages for latency.
+Always add 3x buffer for peak traffic.
+
+
+
+What are the three required properties of a correct distributed lock? $$$$$ 1. Mutual exclusion — only one holder at a time. 2. Deadlock freedom — lock releases even if holder crashes (use TTL). 3. Fault tolerance — lock service survives node failures.
+
+What is the fencing token pattern and why is it needed?
+$$$$$
+Problem: Node A holds lock, GC pauses for longer than TTL, lock expires, Node B acquires lock. Node A resumes thinking it still holds the lock. Both write to the resource — split brain.
+Solution: Lock service returns monotonically increasing token (seqNo) on each acquisition. Resource validates token on every write — rejects writes with token < current max seen. Node A's token (47) < Node B's token (48) → Node A's write rejected.
+Key insight: The resource being protected must also validate the token, not just the lock service.
+
+Why use a relational DB for distributed locks instead of Cassandra?
+$$$$$
+Relational DB provides ACID transactions and true atomic compare-and-swap via SQL UPDATE WHERE.
+Cassandra has no row-level locking and no cross-table transactions.
+SQL for atomic lock acquisition:
+UPDATE locks SET holderId='pod123', expiresAt=now()+interval'10s', tokenSeqNo=tokenSeqNo+1
+WHERE lockId='payment-lock' AND (holderId IS NULL OR expiresAt < now());
+Rows affected = 1 → acquired. Rows affected = 0 → someone else holds it.
+
+What is the distributed lock table schema?
+$$$$$
+Table: locks
+- lockId (PK)
+- holderId (podId or UUID)
+- tokenSeqNo (integer, increments on each acquisition)
+- expiresAt (timestamp)
+- acquiredAt (timestamp)
+
+Should a distributed lock system be CP or AP? $$$$$ Always CP. A lock that allows two holders simultaneously is broken by definition. Use sync replication (Postgres with synchronous_commit, etcd, or ZooKeeper). During network partition, refuse lock acquisitions rather than risk split brain.
+
+
+What algorithm is best for API rate limiting and why? $$$$$ Token bucket — allows legitimate bursting up to bucket size, memory efficient (just store token count + last refill time), atomic via Redis Lua script. Fixed window has boundary bug; sliding window is memory heavy.
+
+How do you implement token bucket atomically in Redis? $$$$$ Use a Lua script — Redis executes Lua atomically, no interleaving. Script reads tokenCount + lastRefillTime, computes refill, checks if tokens available, decrements, returns allow/deny. Single atomic operation regardless of concurrent clients.
+
+What Redis data structure stores the token bucket state? $$$$$ Redis Hash: HSET ratelimit:apiKey tokenCount 1000 lastRefillTime 1716123456. Two fields per key, atomic updates via Lua.
+
+How do you handle hot API keys (single key generating 500K req/min)?
+$$$$$
+Partition key: hash(apiKey|bucketId) where bucketId = 0 to N.
+Each bucket enforces limit/N independently.
+Trade: strict accuracy for performance — user may exceed global limit by at most N-1 requests.
+This is local rate limiting — used by Google, Stripe, Cloudflare at scale.
+
+Should a rate limiter fail open or closed? $$$$$ Fail open for revenue-generating APIs (Google Maps, Uber) — blocking legitimate users costs money. Fail closed for security-critical systems (login, payments). Always make this decision explicit based on business context.
+
+How do you propagate rate limit config changes to all nodes instantly? $$$$$ Store config in ZooKeeper. Nodes register watches on config keys — ZooKeeper pushes notifications instantly on change (not polling). Nodes update in-memory config within ~100ms. Push over poll always for config that needs fast propagation.
+
+
+What is a circuit breaker and what are its three states?
+$$$$$
+Pattern to prevent slow/failing dependencies from cascading.
+Closed: normal operation, all requests pass through.
+Open: fail fast, all requests immediately return error without calling dependency.
+Half-open: after timeout, allow limited traffic to probe if dependency recovered.
+Transitions: Closed → Open when error rate exceeds threshold. Half-open → Closed if probes succeed. Half-open → Open if probes fail.
+
+Where should circuit breakers be placed in a microservices architecture? $$$$$ At every service boundary, as close to the slow dependency as possible. Not just at API Gateway — each service needs its own circuit breaker for each of its dependencies. Also map failure mode per dependency: load-bearing dependencies → fail the request; decorative dependencies → use fallback and continue.
+
+What is the thundering herd on recovery problem and how do you solve it?
+$$$$$
+Problem: 100 circuit breaker instances all enter half-open simultaneously after recovery, send 100 probe requests, overwhelm the just-recovered service.
+Solution 1: Jitter — each circuit breaker waits baseTimeout + random(0, maxJitter) before probing.
+Solution 2: Shared circuit state in Redis — one node probes, updates shared state (open/half-open/closed), all instances read shared state. Only 1 probe request total instead of 100.
+
+How do you monitor for cascading failures before they happen? $$$$$ Track p50, p95, p99 latency (not averages — averages hide tail latency). Alert on p99 > threshold, error rate > 1%, thread pool utilization > 80%. Never use averages for latency monitoring — 1% of requests at 10s makes average look fine while system is on fire.
+
+
+How do you detect silent data corruption (e.g. wrong fares)?
+$$$$$
+Business metrics monitoring — not just infra metrics (CPU, latency).
+Track p50, p95 fare amounts per city per hour.
+Alert when p50 fare > 2x historical average for same time/location.
+Target detection within 5 minutes — quantify the SLA.
+Use canary deployments — deploy to 1% of traffic first.
+
+How do you safely fix 500K corrupted rows in production?
+$$$$$
+1. Identify affected rows: WHERE timestamp BETWEEN t1 AND t2 AND region = affected
+2. Recalculate correct values using historical data (e.g. historical surge prices)
+3. Write corrected values to temp table first
+4. Manually verify a sample (1000 rows)
+5. Batch update production at night in chunks of 1000 with sleep between
+6. Use compare-and-set: UPDATE trips SET fare=correct WHERE tripId=X AND fare=corrupted_value
+7. Monitor after each batch
+
+What is compare-and-set and why is it important for data fixes? $$$$$ Only update a row if its current value matches what you expect. Prevents double-correction if someone already fixed the row manually. UPDATE trips SET fare=45 WHERE tripId='abc' AND fare=450. Rows affected=0 → already fixed, skip.
+
+How do you store historical surge prices for use in fare recalculation?
+$$$$$
+Time-series table in wide-column DB:
+Partition key: geohash
+Clustering key: timestamp
+Columns: multiplier
+TTL: 30 days
+On recalculation: JOIN on geohash WHERE timestamp CLOSEST TO trip.startTime.
+
+
+How do you prevent 10M users simultaneously causing a cache miss to hit the DB?
+$$$$$
+Cache mutex using Redis SET NX (set if not exists):
+SET fetching:articleId "1" NX EX 5
+- Got lock → fetch from DB → populate cache → release lock
+- Didn't get lock → wait 100ms → retry (cache will be populated)
+Only 1 DB request regardless of concurrent misses. TTL on lock ensures release even if fetcher crashes.
+
+How do you prevent cache stampede on scheduled TTL expiry? $$$$$ Add jitter to TTL: TTL = base_ttl + random(0, max_jitter). Spreads expiry across time window instead of simultaneous expiry. Combine with cache mutex for any individual miss.
+
+How do you pre-warm cache for predictable traffic spikes? $$$$$ Identify upcoming high-traffic events (Super Bowl, elections, product launches). Pre-scale horizontally before event. Pre-populate cache with expected content. Push to CDN edge nodes globally in advance. This is traffic shaping — control when load hits infrastructure.
+
+
+What is clock skew and why does NTP not fully solve it? $$$$$ Clock skew = difference in time readings between distributed nodes. NTP reduces skew to ~100ms but never eliminates it. 100ms is enough to cause fare boundary issues, lock expiry disagreements, and ordering bugs.
+
+Where does clock skew cause bugs in distributed systems?
+$$$$$
+1. Distributed lock TTL: Node B's clock thinks lock expired when Node A still holds it → split brain (fix: fencing tokens)
+2. Payment deduplication: Same payment processed at slightly different timestamps → treated as two payments → double charge (fix: sequence numbers not timestamps)
+3. Cassandra LWW: Two nodes update same record, wrong timestamp wins → stale data persists (fix: logical clocks)
+4. Analytics: Trip duration calculated incorrectly → wrong fare → wrong driver payout
+
+What is the universal fix for clock skew in ordering and deduplication? $$$$$ Use logical clocks (sequence numbers, Lamport timestamps) instead of wall clocks for ordering and deduplication. Wall clocks are for display only. Sequence numbers are strictly monotonically increasing and never tie.
+
+What is Google TrueTime? $$$$$ GPS + atomic clock-based time service used in Google Spanner. Returns time as an interval [earliest, latest] with guaranteed bounds on uncertainty. Allows Spanner to make globally consistent ordering decisions despite clock skew.
+
+
+What is the escalation ladder for handling back pressure in a Kafka pipeline?
+$$$$$
+1. Alert at 80% queue capacity — notify on-call
+2. Scale Kafka horizontally (add partitions + consumer instances together)
+3. Scale consumers to match partition count
+4. Back pressure producer — return 429, producer retries with exponential backoff
+5. Load shed non-critical events (analytics, logging) — never drop payment-critical events
+
+What is the problem with adding partitions to an existing Kafka topic?
+$$$$$
+Kafka routes messages via hash(key) % numPartitions.
+Adding partitions changes numPartitions → same key now hashes to different partition.
+Events for the same entity (e.g. riderId) split across old and new partitions → ordering guarantees broken.
+Fix: Plan partition count upfront with room to grow (start with 1000 partitions). Treat partition count as operationally immutable — like a DB schema change.
+
+How do you separate critical from non-critical Kafka pipelines?
+$$$$$
+Use separate Kafka topics with different priority levels:
+- surge-critical topic → dedicated low-latency consumer, never overloaded
+- analytics-general topic → bulk pipeline, can lag during spikes
+Never let high-volume non-critical pipeline starve low-volume critical one.
+This is traffic isolation.
+
+
+Which components should be CP vs AP in Uber during a network partition?
+$$$$$
+AP (availability over consistency):
+- Driver location — stale locations acceptable, availability critical
+- Trip matching — better to match with slightly stale data than reject rider
+- User profiles — stale profile data acceptable
+
+CP (consistency over availability):
+- Payments — never process payment twice or lose a transaction
+- Distributed locks — must be consistent, availability sacrificed
+
+How do you handle ride requests when a data center can't reach the one owning the driver data? $$$$$ Route requests to the data center that owns the driver data via LB rerouting. Network partition between data centers doesn't prevent users from reaching either — LB exploits this. Requests follow the data, not the geography.
+
+How do you reconcile diverged data after a network partition heals?
+$$$$$
+Use delta sync (WAL exchange scoped to partition window):
+- Each region maintains changelog of all writes with timestamps during partition
+- On heal: exchange only changelog entries that occurred during partition window
+- Apply missing entries to each region
+- Much cheaper than full data sync
+Tools: Cassandra anti-entropy repair does this automatically.
+
+How do you prevent dual-assignment conflicts during network partition? $$$$$ Single master per entity — each driver has a designated home region that owns all writes. Only that region can assign trips to that driver. Other regions can read (via async replication) but never write. Eliminates conflict by design.
+
+
+How do you handle a Redis hotspot (single key getting 500K reads/second)?
+$$$$$
+Local in-memory cache on each application server instance:
+- Cache value in memory for 1-2 seconds
+- Requests serve from memory — never hit Redis
+- Redis only gets 1 request per instance per TTL period
+- 500K req/sec across 100 instances = 50 req/sec to Redis
+Tradeoff: value can be 1-2 seconds stale — acceptable for surge pricing, not for payments.
+
+How do you diagnose a Cassandra hotspot?
+$$$$$
+Drill from aggregate → node → partition → key:
+1. Aggregate p99 fine → check per-node latency
+2. One node hot → run: nodetool tablehistograms <keyspace> <table> (shows partition size distribution)
+3. Hot partition → run: nodetool toppartitions <keyspace> <table> 60 10 (top 10 hottest partitions in last 60s)
+4. Specific partition identified → add bucketing or change partition key
+
+How do you monitor for hotspots before they cause outages? $$$$$ Per-entity monitoring, not just aggregate. Alert when: any single node > 80% while cluster average < 50%; any single Redis key > 10K req/sec; any Cassandra partition > 100MB. Aggregate p99 is necessary but not sufficient — hotspots are invisible on aggregate metrics.
+
+
+How do you add a nullable column to a 500M row table with zero downtime? $$$$$ In PostgreSQL, adding a nullable column with NULL default is instant — no table scan, no lock. Just: ALTER TABLE trips ADD COLUMN scheduledAt TIMESTAMP NULL. Then backfill asynchronously.
+
+What is the expand-contract pattern for zero-downtime schema migrations?
+$$$$$
+Step 1 - Expand: Add new column (nullable), deploy code that writes to both old and new column.
+Step 2 - Migrate: Background job backfills existing rows in small batches, adaptive to DB CPU.
+Step 3 - Verify: Confirm all rows have correct values. Run shadow reads.
+Step 4 - Contract: Remove old code paths, add NOT NULL constraint if needed.
+Never skip verification before contracting.
+
+How do you add a NOT NULL constraint to an existing column without downtime?
+$$$$$
+Use NOT VALID + VALIDATE:
+ALTER TABLE trips ADD CONSTRAINT col_not_null CHECK (col IS NOT NULL) NOT VALID;
+ALTER TABLE trips VALIDATE CONSTRAINT col_not_null;
+NOT VALID: adds constraint instantly without scanning existing rows.
+VALIDATE: scans in background without full table lock.
+Before this: backfill all NULLs, verify zero NULLs remain.
+
+How do you safely backfill 500M rows?
+$$$$$
+1. Store checkpoint (lastProcessedId) in a separate table — resumable on crash
+2. Adaptive batch size based on DB CPU:
+   - CPU < 50% → batch 5000 rows, no sleep
+   - CPU 50-70% → batch 1000 rows, 100ms sleep
+   - CPU > 70% → pause entirely
+3. Run during off-peak hours but don't limit to only off-peak — adaptive throttling handles it
+4. Always use compare-and-set in update to avoid double-processing
+
+How do you rename a column without touching the DB schema? $$$$$ Use a DB view with alias: CREATE VIEW trips_v AS SELECT scheduledAt AS bookingTime FROM trips. Or transform at API layer in response serializer. Never rename DB columns — use abstraction at view or API layer instead. DB column renames require full expand-contract cycle — high risk, low reward.
+
+
+How do you prevent a bug from burning through 3rd party API quota?
+$$$$$
+1. Track API call rate — alert when burning faster than expected (50% used by 9AM on a daily quota)
+2. Tiered alerts: 50% → warning, 75% → page on-call, 90% → auto-enable fallback
+3. Feature flag per API call — flip instantly without deployment to stop over-calling
+4. Canary deployment — deploy to 1% of traffic first, monitor quota burn rate
+
+What are fallback options when Maps API quota is exhausted?
+$$$$$
+Priority order:
+1. Historical ETA — average trip time between similar origin/destination pairs from own data
+2. Simple distance calculation — straight line distance ÷ average speed for area/time of day
+3. Cached ETAs — recent Maps API responses for similar routes, serve stale with disclaimer
+Never show nothing — always degrade gracefully with approximate data.
+
+
+What is a poison pill in a Kafka pipeline and how do you handle it?
+$$$$$
+A malformed message that causes consumer to crash repeatedly in an infinite loop.
+Fix:
+1. Consumer retries up to N times (e.g. 3) with exponential backoff
+2. After N retries → move message to Dead Letter Queue (DLQ)
+3. Consumer acknowledges original message → moves to next message → pipeline unblocked
+4. Engineer inspects DLQ → fixes data → optionally replays
+Key: retry count must be stored outside consumer process (Redis keyed by messageId) — consumer crash resets in-process count.
+
+How do you prevent poison pills from entering Kafka in the first place?
+$$$$$
+Schema registry (Confluent Schema Registry) — producer validates against schema before publishing. Malformed message rejected at source.
+Two levels of validation:
+1. Syntactic: field types, required fields, format (tripId not null, timestamp is long, fare is number)
+2. Semantic / business rules: fare BETWEEN 0 AND 500, tripDuration BETWEEN 60 AND 18000 seconds, fare/distance within reasonable range
+Also add cross-field validation: endTime > startTime, fare correlates with distance and duration.
+
+
+What is the outbox pattern for ensuring cross-service consistency?
+$$$$$
+Problem: Need to write to DB and publish to pubsub atomically.
+Solution:
+1. Write to primary table + outbox table in same DB transaction (atomic)
+2. Outbox worker reads unprocessed entries, publishes to pubsub
+3. Consumer processes event, writes to secondary table
+4. Mark outbox entry as processed
+Key: pubsub must be at-least-once. Use idempotency key on consumer to handle duplicates.
+
+How do you prevent double-charging a customer?
+$$$$$
+1. Generate transactionId before calling payment provider
+2. Write transactionId to DB as 'pending' (pre-record intent)
+3. Call payment provider with transactionId as idempotency key
+4. On success → mark as 'complete'. On network timeout → retry with same transactionId
+5. Payment provider returns original result for duplicate transactionId — no double charge
+6. Run daily reconciliation job as safety net — compare DB records with payment provider records
+
+What payment states should a robust payment state machine include?
+$$$$$
+pending → processing → complete
+                     → disputed → resolved_won → complete
+                               → resolved_lost → refunded
+                     → failed
+                     → refunded
+Never use just pending/complete. Missing states cause money stuck or paid out incorrectly.
+Always freeze driver payout for disputed trips until resolution.
+
+
+How do you handle push notification delivery to an offline user?
+$$$$$
+1. Notification fails → move to DLQ
+2. Store in pendingNotifications table: partition key=userId, clustering key=notificationId, columns=type, payload, createdAt, retryCount
+3. When user comes online → app hits /notifications/pending endpoint → backend queries by userId → returns all pending → app processes in order → acknowledges → backend deletes
+4. DLQ worker retries with exponential backoff up to max retries → then alert on-call
+
+How do you ensure media is available in receiver's region before sending push notification?
+$$$$$
+1. Sender uploads media to home region blob store
+2. Message event published to pubsub
+3. Consumer checks if media is replicated to receiver's region blob store
+4. If not → trigger cross-region replication, wait for confirmation
+5. Only after replication confirmed → send push notification
+6. Receiver fetches from local region — fast, no lag
+Notification is last step, not immediate reaction to write.
+
+
+
+State the fundamental rule for choosing a partition key. $$$$$ Partition key = the WHERE clause of your most frequent query. It must anchor on the thing you filter by first. Never choose partition key based on write convenience (e.g. eventId) — always based on read patterns.
+
+What is the difference between exactly-once, at-least-once, and at-most-once delivery?
+$$$$$
+At-most-once: mark complete BEFORE processing. Risk: lose messages on crash. Use for: logging, non-critical analytics.
+At-least-once: mark complete AFTER processing. Risk: process twice on crash. Use for: most systems with idempotency keys.
+Exactly-once: theoretically impossible in distributed systems (Two Generals Problem — can't know if other side received message). Achieve effectively-once via at-least-once + idempotency keys.
+
+Why is exactly-once delivery theoretically impossible? $$$$$ Two Generals Problem — if there is no response, you can't distinguish between "receiver didn't receive" and "receiver's response was lost." You must retry to be safe (at-least-once) or not retry (at-most-once). True exactly-once requires the resource to also be idempotent.
+
+What is the universal pattern for handling high-cardinality hot partitions? $$$$$ Composite partition key with bucketId: (primaryKey, bucketId). Write: bucketId = random(0, N). Read: scatter-gather across all N buckets in parallel, aggregate results. N is fixed config — reads are predictable. Trade strict accuracy for horizontal scalability.
+
+When should you use push vs pull for config propagation? $$$$$ Always push (ZooKeeper watches, pubsub notifications) for config that needs fast propagation (circuit breaker state, rate limit config, feature flags). Pull (polling) adds unnecessary latency. Push propagates in ~100ms; polling adds up to poll interval delay.
+
+What is the anti-corruption layer pattern? $$$$$ Translate between storage representation and domain model at the data access layer boundary. Example: DB stores -1 for unmatched driverId (technical constraint), domain model uses null (semantic meaning). Transformation happens in repository layer — business logic never sees -1.
+
+When should you denormalize data in NoSQL?
+$$$$$
+Denormalize when:
+1. The query pattern requires data from multiple entities together
+2. Join cost at read time is unacceptable
+3. The denormalized data changes infrequently relative to reads
+Always include UI display fields (names, avatars, previews) in denormalized tables — don't force a second lookup for every displayed record.
+Use outbox + pubsub to keep denormalized copies in sync.
+
+What is the difference between decorative and load-bearing features? $$$$$ Load-bearing: blocking — system cannot function without it (driver assignment, fare calculation). Decorative: non-blocking — enhances experience but system works without it (ETA, surge display, profile photo). Never let decorative features block load-bearing ones. Circuit break decorative dependencies; fail-fast load-bearing ones.
+
+How do you quantify tradeoffs in a Staff-level interview?
+$$$$$
+Never say "eventual consistency is acceptable." Say:
+- "60-second staleness is acceptable because surge pricing doesn't need real-time accuracy for ride matching"
+- "We can tolerate up to 5 minutes of rank staleness — disputes are reviewed by humans over hours"
+- "Detection within 5 minutes is our target — at 10K trips/min, 50K trips could be affected before alert fires"
+Always attach a number and a business justification to every tradeoff.
+
+
+
+What operations are NOT supported in Cassandra?
+$$$$$
+- No row-level locking (updates are just new timestamped writes, LWW)
+- No UNIQUE constraints
+- No cross-table atomic transactions (logged batches only work within same partition)
+- No JOIN queries
+- No foreign keys
+- Full-text search requires Elasticsearch
+
+How do Cassandra logged batches work and what are their limitations? $$$$$ Logged batches in Cassandra are atomic only within the same partition key on the same table. They are NOT atomic across different tables or different partition keys. Use for: writing to a table and its outbox when both share the same partition key. Do not use for: cross-table atomicity (use outbox pattern instead).
+
+What are the key Cassandra diagnostic commands?
+$$$$$
+nodetool tablehistograms <keyspace> <table> — partition size distribution, read/write latency histograms. Use to detect data skew.
+nodetool toppartitions <keyspace> <table> 60 10 — top 10 hottest partitions by request frequency in last 60 seconds. Use to identify hot partition keys.
+TRACING ON; <query>; — trace a specific query to see which node/partition handled it and timing of each step.
+
+
+
+What Redis persistence options exist and when do you use each?
+$$$$$
+RDB (snapshots): periodic point-in-time dumps. Fast recovery, but lose data since last snapshot. Use for: cache data you can rebuild.
+AOF (Append Only File): logs every write to disk. Near-zero data loss on crash, replay log to recover. Use for: like counts, rate limit counters, any data where losing recent writes is unacceptable.
+For like counts and counters: AOF is sufficient — acceptable to lose a few counts in catastrophic crash.
+
+What Redis commands are atomic and useful for distributed systems?
+$$$$$
+INCR / INCRBY — atomic increment, no lost updates. Use for: like counts, rate limit counters, leaderboard scores.
+SET key value NX EX seconds — set if not exists with TTL. Atomic. Use for: distributed locks, cache mutex.
+ZADD / ZRANGE / ZRANK / ZREM — sorted set operations. Use for: leaderboards, time-ordered feeds.
+Lua scripts — entire script executes atomically. Use for: token bucket rate limiting, any read-compute-write that needs to be atomic.
+
+
+
+What is the difference between Kafka offset commits and SQS visibility timeout?
+$$$$$
+SQS: each message has independent visibility timeout. Processing one message doesn't affect others. On crash: only that message redelivered.
+Kafka: sequential offsets per partition. Consumer commits offset after processing. On crash: all messages from last committed offset onward redelivered.
+Implication: Kafka crash during batch reprocesses entire batch. Commit per-message (not per-batch) for payment processing to minimize redelivery scope.
+
+Why must retry count be stored outside the Kafka consumer process? $$$$$ If retry count is in-process and consumer crashes, new consumer instance starts with retry count = 0. Poison pill gets infinite retries. Store retry count in Redis keyed by messageId or use Kafka's built-in retry topic with count in message header — both survive consumer crashes.
+
+What is a schema registry and why use it with Kafka? $$$$$ Schema registry (e.g. Confluent) stores and enforces message schemas. Producer validates message against schema before publishing — malformed messages rejected at source, never enter Kafka. Supports schema evolution (backward/forward compatibility). Prevents poison pills caused by syntactic errors. Combine with business rule validation for semantic errors.
+
+
+
+How do you keep Elasticsearch in sync with PostgreSQL?
+$$$$$
+Event-driven sync (not scheduled):
+1. DB update → publish event to Kafka (or use CDC tool like Debezium to capture WAL changes automatically)
+2. Consumer receives event, fetches latest data from PostgreSQL
+3. Re-indexes specific document in Elasticsearch using consistent _id (use your DB primary key as ES _id)
+Idempotent: indexing same document twice just overwrites with same/latest data.
+
+How does Elasticsearch handle document updates and inverted index cleanup? $$$$$ On document overwrite (PUT /index/_doc/{id}), Elasticsearch automatically removes old terms from inverted index and adds new terms. No manual cleanup needed. Under the hood: mark old document as deleted, write new document, Lucene segment merge cleans up in background. This is why single global index beats per-city indexes for geo data.
+
+How do you handle out-of-order updates in Elasticsearch?
+$$$$$
+Use sequence numbers (not timestamps — clocks lie) for versioning:
+- Each DB update gets auto-incrementing version number
+- Version included in Kafka event
+- Elasticsearch document stores version field
+- On update: if incoming version < stored version → skip (already have newer data)
+- PostgreSQL auto-increment gives this for free: version = version + 1 on each UPDATE
+
+How should you structure an Elasticsearch index for geo-search?
+$$$$$
+Single global index with geo_point field (not per-city indexes):
+{
+  "restId": "123",
+  "name": "Pizza Palace",
+  "location": { "lat": 28.6, "lon": 77.2 },
+  "cuisine": ["pizza", "italian"]
+}
+Query: geo_distance filter on location field.
+Benefits: location updates are single document overwrites (no cross-index cleanup), Elasticsearch handles geo sharding internally, use restId as routing key to co-locate same restaurant's data on same shard.

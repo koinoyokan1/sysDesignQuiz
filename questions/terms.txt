@@ -100,11 +100,161 @@ For the actual chat message, the sender generates another symmetric key called m
 Why cross region sync db is not recommended? $$$$$ Because India <-> US roundtrip is 300ms. So, latency will be high.
 Why is cursor better than pagenation at scale? $$$$$ Because at scale/distributed acursor will point to last used but offset/page will not so if there is a insert prior to the last seen then pagination will duplicate shown data
 Should chatting app be multiregion? $$$$$ yes
+Write to db first then to cache $$$$$ this avoid scenario where cache success but db fail and then cache evicted so info lost
+For each API think of? $$$$$ idempotency
+How cursor works? $$$$$ Initially call to API using just size of resp then resp contains cursor. FOr next calls use prev calls cursor.
+Best way to rate limit? $$$$$ by logged in user
+How to solve hot partitioning when storing followerId, followeeId table in insta? $$$$$ In distributed databases like Apache Cassandra or Amazon DynamoDB, all rows with the same partition key are stored together, so if we model followers as PK = followeeId, then a celebrity with hundreds of millions of followers causes all reads and writes to hit the same partition, creating a hot partition that overloads a few nodes and slows the system. To solve this, we shard the celebrity’s followers across multiple partitions using a bucketed key like PK = followeeId_bucket, where bucket = hash(followerId) % N; this spreads followers evenly across many partitions and machines, allowing follower reads and writes to scale horizontally while preventing any single partition from becoming too large or too hot.
+insta feed gen algo $$$$$ At internet scale, Instagram uses a hybrid fanout strategy for feed generation. When a non-celebrity posts, their content is fanned out asynchronously via a message queue (like Kafka) to fanout workers, which write the post ID and its creation timestamp as the score into each follower's pre-built feed list — stored in a distributed Redis cluster, sharded by user ID, so each user's feed sorted set lives close to their region. When a celebrity posts, the fanout is skipped entirely; instead their posts sit in their own per-celebrity sorted list, also in Redis. At read time, the API server (not a separate store) instantiates a min-heap in memory — ephemeral, living only for the duration of that request — and performs a k-way merge between the requesting user's pre-built feed sorted set and one sorted list per celebrity they follow, always popping the highest timestamp across all lists to produce a globally ordered reverse-chronological feed. The heap is never persisted; it's reconstructed per request on the API server handling that user's feed call, which is why the API tier needs to be stateless and horizontally scalable. The pre-built feed in Redis is capped (say at 800 posts) and trimmed on write to bound memory, and the Redis cluster itself is configured with replication and persistence so feed data survives node failures.Sonnet 4.6
+How a user always hits their closest server? $$$$$ Instagram uses a global Anycast DNS and CDN layer (Cloudflare or their own PoPs) where the same domain instagram.com resolves to different IP addresses depending on where the DNS query originates. A user in Mumbai gets routed to the Mumbai PoP, a user in London hits a European PoP. This is handled entirely at the DNS and BGP routing level before the request even reaches Instagram's infrastructure. The closest Point of Presence (PoP) terminates the connection, handles static assets, and forwards API requests to the nearest application server cluster. The issue here is that "nearest" by network hops isn't always nearest by latency — sometimes a geographically farther server has better peering and wins. This is resolved by using latency-based routing (Route 53's latency routing for example) rather than pure geographic routing, so the decision is based on measured round-trip time, not physical distance.
+How a user's cache is kept close to them? $$$$$ Each region runs an independent Redis cluster, and at account creation the user is assigned a home region. All feed writes (fanout) and feed reads go to that region's Redis cluster. The routing service reads the user's home region from a lightweight global directory (a fast key-value store like Zookeeper or a replicated config service) and forwards the request to the correct regional Redis. The problem is cross-region followers — if your followers are in Tokyo and London, fanout workers in your home region must write into foreign regional Redis clusters over the WAN, adding latency to every write. This is resolved by making fanout asynchronous via a message queue like Kafka, so the post write returns immediately to the user and fanout propagates in the background. Staleness in foreign caches of a few seconds is accepted as eventual consistency.
+How a user's DB data is kept close to them? $$$$$ At account creation, the user's ID is generated with an embedded region identifier, so their row always hashes to a shard that is physically pinned to their home region's database cluster. A global shard map (maintained in a config service) explicitly maps shard ranges to regions, so shard placement is never random. Each region runs a primary DB for its own shards and maintains read replicas of foreign shards for cross-region reads. The hard problem is relational data — your followers live in 50 different regional shards and any social graph query inherently crosses regions. Instagram resolves this through aggressive denormalization (storing follower counts, usernames, avatars locally rather than joining across regions) and using TAO, Meta's distributed social graph store, which is purpose-built to cache and serve graph edges locally per region while asynchronously replicating from the source of truth. Cross-region writes (like a Mumbai user following a Tokyo user) are handled by routing the write to the owner shard's primary and replicating the edge locally — with the accepted tradeoff that the follow relationship may take a few seconds to appear globally.
+How can we confirm user's data in db is close to user? $$$$$ We shard using (region, shard) i.e. users shard is always always in home region. So, even if user1 and user2 from diff region have same shard their data is placed in their resp region
+How multipart upload works $$$$$ A typical multipart upload REST flow starts with the client calling something like POST /uploads/initiate to create an upload session, and the server returns an uploadId plus optionally presigned URLs for chunk uploads. The client then splits the file into parts and uploads each independently using calls like PUT /uploads/{uploadId}/parts/{partNumber}, often in parallel and directly to object storage. The server tracks metadata for uploaded parts such as part number, checksum/ETag, and status. If the upload is interrupted, the client can call GET /uploads/{uploadId}/status to discover which parts already succeeded and resume only missing chunks. Once all parts are uploaded, the client finalizes the upload using POST /uploads/{uploadId}/complete with the list of uploaded parts and their ETags, after which the storage system validates and assembles the final object. Optionally, DELETE /uploads/{uploadId} aborts and cleans up incomplete uploads.
+blobkey vs bloburl $$$$$ blobKey is the permanent internal identifier of the object inside blob storage and never expires. This is usually a temporary signed URL generated dynamically.
+in dropbox why is caching userId to list of files shared with/owned by the user bad? $$$$$ Bcause it wont scale even with LRu. LRU applies to the whole cache not indiv entries so if 1 file is shared with 50 million users then that cache entry will have key as fileId and value as set of 50M users. Instead keep a cache of set of (userId, fileId) and use LRU. To find all files of user or all users of file, go to db
+What should be the response code when idempotency-key used 2nd time? $$$$$ same as first not 409
+You're designing a URL shortener (like bit.ly). Your write throughput is ~50K URLs/second globally. You need to partition your database. What would you choose as your partitioning key, and why? What problem does your choice avoid? $$$$$ I will use a consisteny hashing based partitioning. The partition key will be the hash of normalized short url. Since hash of url will be random, it avoids the problem of hot partition. Note that we will be fetching longurl from given shorturl, so its imp that we are able to get the server based on the shorturl and thus hash of longUrl is a bad idea
+You're designing a messaging app like WhatsApp. You need to store and query messages. The most common query is: "Fetch the last 50 messages in a conversation" What's your partitioning key — and what's your sort/clustering key within a partition? $$$$$ The partition key can be the chat/groupId and clustering key can be timestamp initially. The partition key can be the chat/groupId and clustering key can be timestamp initially. If there are hot groups ie groups with millions of users then its partition becomes hot, so use a composite partition key like (chatId, day, bucket) to shard writes across multiple partitions/nodes while using serverSeqId as the clustering key to preserve ordering and efficiently fetch the latest messages.
+Why for hot group in whatsapp composite key of chatId, day, bucket all are used? $$$$$ without chatId the partition will contain other chats and finding a specific chat will be time consuming, without day, it will be a ever growing partition but with day it can store at max 1 days data, without bucket a days read/write all go the same partition for thesame chatId
+When partitioned by chatid, day, bucket. How data fetched? $$$$$ so if there are 15 buckets then the PK becomes (chatId1|2311154(day)|0)... (chatId1|2311154|14). THen all data fetched and K way sorted
+You're designing a ride-sharing app like Uber. Drivers are constantly sending their location updates — ~10 updates/second per driver, millions of drivers globally. You need to efficiently answer the query: "Find all available drivers within 5km of this passenger" What's your partitioning key for storing driver locations?
+$$$$$
+geohash encodes location as a string where shared prefix = geographic proximity. So tdr1 and tdr2 are neighbors, and you can route them to the same partition.
 
+For Uber's driver location use case, what's the risk of choosing a too fine-grained geohash (e.g. 8 characters, ~38m x 19m area) as your partition key? And what's the risk of too coarse (e.g. 3 characters, ~156km x 156km area)?
+$$$$$
+If the geohash is too fine grained then we will have to look at multple adj partitions to fetch drivers nearby and then merge them. If its too coarse then we will have a lot of drivers to look at and unnecessarily increase compute Too coarse also risks hot partitions — dense cities like Mumbai or NYC would have millions of drivers in one partition while rural areas have almost none. So coarse geohash brings back the uneven distribution problem.
 
+You're designing a system like Twitter/X. You need to partition the Tweets table. You have two access patterns: fetch a tweet by tweetId and fetch all tweets by a userId (profile page). How do you handle this with partitioning? $$$$$ Maintain two tables: a tweets table partitioned by hash(tweetId) for fast single tweet lookup, and a user_tweets table partitioned by hash(userId) with timestamp as the clustering key for fast fetching of a user's tweets in sorted order. When a user posts, write to both tables (denormalization). This doubles writes, but tweets are far more read-heavy than write-heavy so the tradeoff is acceptable. Since one write may fail, use idempotent retries or async reconciliation to maintain consistency between the tables.
+You're designing an order system with denormalized tables like orders, user_orders, and sales_orders, all partitioned differently. When an order is updated (e.g., cancelled or marked delivered), how do you ensure consistency across all these tables? $$$$$ Use the outbox pattern. Instead of updating all tables synchronously, perform a single atomic database transaction that updates the primary orders table and inserts an event into an outbox table. A separate async worker (or CDC pipeline like Debezium/Kafka) reads the outbox events and propagates the change to user_orders, sales_orders, and other derived views. This ensures the source-of-truth update and event creation are atomic, avoids partial failure across partitions/services, and enables eventual consistency with retry-safe, idempotent consumers that update downstream tables reliably.
+Partition key for cache that is storing users req/min $$$$$ userId since our query will be current req per min to add 1 to it. Note that the partition will grow forever unless we have a ttl. If without ttl use (userId, ddyymm) i.e. change partition every day
+For elastic search system like linkedin job search, we index by jobId and then do scatter gather. But here to avoid scatter gather to all shards we geoHash so we search only a subset of shard associated with the loc being searched. The geoHash will be adpative so that it will be more granular for san francisco but coarse for Bhopal. The shard map helps identify hash(region) to shard list mapping. $$$$$ ok
+How is adaptive shard map stored $$$$$ A dedicate service can be resposible, map stored in repicated KV store and db as source of truth. Also cached in memory in stateless srv of service, so even if redis goes down its ok we have stale info in cache.
+For google analytics what is a good partition key? $$$$$ hash(websiteId|mmddyyhhmm|bucketId) where bucketId = hash(msgId). This way for each hr the same website will be sent to same set of partitions determined by bucketId
+For google analytics how is data stored? $$$$$ in wide col db with  hash(websiteId|mmddyyhhmm|bucketId) as key. Along with per event we will also store pre-aggregates at write time. i.e. event cnt per min, hr, day in separate tables. Note that the pre-aggregates will not be updated in sync with write. We will instead use pubSub and consumers to async update. Use at least once pubsub with idempotent-key for exactly once proessing.
+Explain how Elasticsearch works in a jobs search system $$$$$ Elasticsearch stores job postings as documents and builds an inverted index mapping words -> documentIds instead of scanning rows; when a user searches "python backend engineer", the query is tokenized, matching docs are fetched from the inverted index across distributed shards, ranked using BM25 relevance scoring (title/skills boosted higher than description), filtered (location/experience), merged from all shards, and returned quickly; data is usually written to Postgres first, then asynchronously indexed into Elasticsearch via Kafka/indexer service, making search near-realtime and eventually consistent.
+How do CRDTs avoid conflicts when multiple users concurrently edit the same document position? $$$$$ CRDTs assign every inserted character a globally unique sortable ID (like positionPath + siteId), so even if 2 users insert simultaneously at the same logical position, their IDs differ and all replicas deterministically merge/sort them into the same final document without locks or a central sequencer.
+In job scheduling a job is to send email. How does the consumer make sure exactly one email sent? $$$$$ notification service should keep table of jobId as idempotency key so that if the same jobId requests to send an email then it doesnt.
+DIff jobs in job schedulers should have diff type
+$$$$$
+RETRY_IMMEDIATELY — run as soon as scheduler recovers
+SKIP_IF_LATE — if missed window, skip and wait for next schedule
+RETRY_ONCE — try once, if missed don't cascade
 
+How does payment system do cross node transcation? $$$$$ Not 2PC because it blocks if there is failure. Use SAGA with an orchestrator. Saga will have set of steps that orch commands and rollback steps too. Centralzed orch will have all info of transc state etc.
+How amazon store handle 2 diff req from diff region for same product when only 1 remain $$$$$ each product has a primacry write node and read replica. So both req go to the same node. Then use atomic read dec cnt write so only 1 of them see cnt=1. Other sees cnt=0
+Netflix CDN will also use sorted set of show's watch count per region to track which shows are popular for prefetching $$$$$ ok
+What happens if a CDN goesdown? $$$$$ We find nearby CDN and reroute but that can overwhelm them so dividetraffic by looking at bothdistance and load on other CDNs
+What to do if netflix knows a popular show is going live at 8 pm? $$$$$ pre scale horizantally the API layer so all play clicks ae handled.
+If there is a sudden incraese in req what to do? $$$$$ LB should keep track of req/s for each API backend. If it crosses a threshold, then scale horizontally and then throttle req until they are up and healthy
+How DLQ works?
+$$$$$
+1. Try realtime delivery via WebSocket
+2. Retry transient failures with exponential backoff
+3. Fallback to push notification
+4. Fallback to email/SMS for critical notifications
+5. If all fail repeatedly -> DLQ
 
+For WS KV use a 2D map with userId and deviceId as the 2 keys. When a WS is down and client recreates a WS conn with new serv then it simply overwrites WS[userId][deviceId] = WS. Note that the client gets userId from auth response and deviceId is generated when the app is downloaded and kept locally but if deviceId repeated say because cookie cleared then TTL will remove older (userId, deviceId): WS map $$$$$ ok
+unlike google docs, dropbox doesnt need to handle parallel updates in a complicated way just create 2 files and tell users of the conflict $$$$$ ok
+What are the main ways pages are ranked in google $$$$$ freshness, number of in-links, query word match cnt, user visits, loction
+how youtube recomm work for users/new users
+$$$$$
+Video features:
 
+View count ✅
+Average watch time (did people finish it or drop off?)
+Like/dislike ratio
+Freshness
+Click through rate
+
+User-video interaction features — these are the most powerful: (not for new users)
+
+Has user watched this creator before?
+Has user watched similar topics recently?
+Time of day (user watches cooking videos in evening, news in morning)
+How long ago user watched similar content
+
+How to partition tries $$$$$ partitiin by first letter and for letters that are hot, partition by first 2 and so on
+in google search how to use trie for predictive search? $$$$$ each leaft store the no of times the sentence was searched. Each node stores top 5. after every search post search event in kafka. Then use kafka elated aggregators and every min add a new event to update trie nodes top 5 sesrch.
+Steps and order of tasks by LB
+$$$$$
+SSL termination — decrypt request
+IP-based rate limiting — cheap first filter
+Authentication — verify JWT
+User-based rate limiting — precise throttling
+Request routing — which service handles this?
+Load balancing — which instance of that service?
+Logging — throughout all stages ✅
+
+How LB load shed? $$$$$ First load shed unimp reqs like likes
+in consistency hashing how replica nodes decided? $$$$$ next R nodes clockwise. R is replication factor
+How do distributed databases resolve concurrent writes to the same key reaching different replicas? $$$$$ Concurrent writes can create conflicting versions across replicas (e.g., value=10 on some nodes and value=20 on others); systems resolve this either by routing all writes through a single primary leader, or in leaderless quorum systems using conflict resolution like last-write-wins timestamps, vector clocks to detect causality/concurrency, CRDT merges, or application-level reconciliation.
+How redis node thats down sync? $$$$$ if for short time then use WAL and updates itself if not simply copy others data
+How stream processor handle ndoe down $$$$$ learn about checkpoint, last processed offset etc
+Kappa Architecture vs lambda $$$$$ ok
+If a common query is select * from bla where a=1 and b=2 and there are billions of valid a values and hunders of b, which is a betteer partition key? $$$$$ a, because it helps distribute widely and also within one value of a, number of b values will be less compared to vice versa
+How to quickly gen chatId for 2 member chat? $$$$$ userId1|userId2 ordered either desc or asc that is predefined
+How does fencing token work?
+$$$$$
+Every lock acquisition gets a higher token, and downstream systems reject operations with older tokens.
+Pod A acquires lock, TTL = 10s
+Pod A gets a GC pause for 12 seconds
+Lock expires, Pod B acquires the lock
+Pod A resumes, thinks it still holds the lock
+Both A and B are now in the critical section
+this is avoided
+
+In a leadership board sys design what if we want to get 5000 to 5100 rank? $$$$$ Then get it from db as storing all rank in cache is not feasible. We can run a cron job that keeps calc ranks and store it in table. The ans may sometimes be stale but that is fine.
+How geohash stores driver location in uber $$$$$ map[geohashid] = [list of driverId] and map[driverId] = (lat,long)
+cassandra outbox pattern can only be used if $$$$$ 100 GB
+How notif to user is handled $$$$$ First send using websocket, if failed then throu push notif if client down then client pulls when online. All pending notif in table.
+After fail over to another region, how to make sure less failures happen because LB has not updated its config and req going to failed reg? $$$$$ reduce dns ttl, retry with expo backoff
+uber driver search should be in waves and expanding radius, 0-2, 0-5 km etc. keep alreadyRequested set of drivers and dont req again. Starting alwasy from 0 km helps req drivers who came to wave 1 radius during wave 2 scan. $$$$$ ok
+What are the diff payment states?
+$$$$$
+pending → processing → complete
+                     → disputed → resolved_won → complete
+                               → resolved_lost → refunded
+                     → failed
+                     → refunded
+
+A rate limiter client increase limit, what happens? $$$$$ the config stored in centralized loc, pushed to all rate limiting servers immediately.
+Say whatsp sender sends media to blobstore and then sends msg to user. What if receiver receives notif before blob store replicated async in receiver's region?
+$$$$$
+The sequence:
+
+Sender uploads media to blob store in their region
+Message event published to pubsub
+Consumer checks if media is replicated to receiver's region
+If not → trigger replication, wait for confirmation
+Only then → send push notification
+Receiver's app fetches media from local region blob store — fast, no lag
+Key insight: Notification is the last step, not an immediate reaction to the write. The consumer orchestrates replication before notifying.
+
+When in ride sharing what if external google maps slows? $$$$$ every servic shoul have circuit breaker pattern. So if called service go down, circuit open opst a threadshod err % then sent errs immediately. After timeout, half open and let few req in, see the resp. If all good then close circult. All serev should have circuit breaker.
+What if uber eta slow because of google map slow? $$$$$ check if func imp or decorative. If imp then fail else continue. FOr eta, show approx values, last known eta for similar locs, hide eta.
+What is cache mutex/lock? $$$$$ when 10M req to cache comes at same time, the first takes the lock and is resp for updating cachefrom db. THe other just try again for cache hit.Post timeout another process tries again.
+when kafka flling too many events what to do? $$$$$ try to scale kafka but scaling means rescructuring all data in nodes, back pressure to producer so producer can get 429 or ignore noncritical events add to kafka. Distinguish nocritical and critaal data so noncrit does affect crit
+How kafka partition incrase works?
+$$$$$
+Three fixes:
+1. Plan partition count upfront:
+Start with 100 partitions even at low volume. Empty partitions are cheap. Rebalancing is expensive. Never need to add partitions.
+2. Use consistent hashing for partition assignment:
+Instead of hash(key) % N — use a consistent hash ring. Adding partitions only remaps a fraction of keys, not all of them. Minimal disruption.
+3. Reprocessing after repartition:
+If you must add partitions — replay all in-flight events from the beginning of the affected time window. Expensive but correct.
+
+How to avoid surge price uber bug effect?
+$$$$$
+Canary deployment — deploy new surge service to 1% of traffic first. If p99 spikes on canary → abort before affecting 100% of users
+Automated rollback — if p99 fare exceeds threshold within 10 minutes of deployment → auto-rollback without human intervention
+Shadow mode testing — run new surge calculation in parallel with old one, compare outputs before switching traffic
+
+How to add new constraint to massive postgress table? $$$$$ postgress has a way to add consrains for new entries but not check it for older entries.
+how idem key stored for POST /v1/rides? $$$$$ store it in db and add unique(userId, key)
 
 
 
