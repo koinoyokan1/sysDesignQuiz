@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Quiz Trainer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Quiz Trainer</h1>
+
+        <h2>Select Quiz File</h2>
+
+        {% for file in files %}
+
+            <div class="quiz-card">
+                <a href="/start/{{ file }}">
+                    {{ file }}
+                </a>
+            </div>
+
+        {% endfor %}
+
+    </div>
+
+</body>
+</html>

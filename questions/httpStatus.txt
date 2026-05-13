@@ -1,0 +1,17 @@
+What does HTTP 200 mean? $$$$$ OK - Request succeeded
+What does HTTP 201 mean? $$$$$ Created - Resource created
+What does HTTP 202 mean? $$$$$ Accepted - Request accepted but not yet processed
+What does HTTP 204 mean? $$$$$ No Content - Successful but no body
+What does HTTP 301 mean? $$$$$ Moved Permanently - Resource moved
+What does HTTP 302 mean? $$$$$ Found - Temporary redirect
+What does HTTP 304 mean? $$$$$ Not Modified - Cached resource still valid
+What does HTTP 400 mean? $$$$$ Bad Request - Invalid input
+What does HTTP 401 mean? $$$$$ Unauthorized - Authentication required
+What does HTTP 403 mean? $$$$$ Forbidden - No permission
+What does HTTP 404 mean? $$$$$ Not Found - Resource missing
+What does HTTP 409 mean? $$$$$ Conflict - Resource conflict
+What does HTTP 429 mean? $$$$$ Too Many Requests - Rate limit exceeded
+What does HTTP 500 mean? $$$$$ Internal Server Error
+What does HTTP 502 mean? $$$$$ Bad Gateway
+What does HTTP 503 mean? $$$$$ Service Unavailable
+What does HTTP 504 mean? $$$$$ Gateway Timeout

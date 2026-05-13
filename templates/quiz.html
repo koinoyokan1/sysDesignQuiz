@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Quiz</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>Quiz</h1>
+
+    <div class="progress">
+        Mastered: {{ mastered_count }}/{{ total_count }}
+    </div>
+
+    <div class="question-box">
+
+        <h2>Question</h2>
+
+        <p style="white-space: pre-wrap;">{{ question }}</p>
+
+        {% if not show_answer %}
+
+            <button onclick="showAnswer()">
+                Show Answer
+            </button>
+
+            <div id="answer-section" style="display:none;">
+
+                <h3>Answer</h3>
+
+                <p style="white-space: pre-wrap;">{{ answer }}</p>
+
+                <form method="POST">
+
+                    <button name="result" value="y">
+                        I Got It Right
+                    </button>
+
+                    <button name="result" value="n">
+                        I Got It Wrong
+                    </button>
+
+                </form>
+
+            </div>
+
+        {% else %}
+
+            <h3>Answer</h3>
+
+            <p style="white-space: pre-wrap;">{{ answer }}</p>
+
+            <div class="message">
+                {{ message }}
+            </div>
+
+            <br>
+
+<button id="next-question-btn"
+        onclick="window.location.href='/quiz'">
+    Next Question
+</button>
+
+        {% endif %}
+
+    </div>
+
+<button
+    onclick="window.location.href='/all'">
+
+    View All Questions
+
+</button>
+</div>
+    
+<script>
+
+function showAnswer() {
+
+    document.getElementById(
+        "answer-section"
+    ).style.display = "block";
+
+    selectedIndex = 0;
+
+    updateSelection();
+}
+
+let selectedIndex = 0;
+
+function getVisibleButtons() {
+
+    const buttons = [];
+
+    // SHOW ANSWER
+    const showBtn = document.querySelector(
+        'button[onclick="showAnswer()"]'
+    );
+
+    if (
+        showBtn &&
+        showBtn.offsetParent !== null
+    ) {
+        buttons.push(showBtn);
+    }
+
+    // RIGHT
+    const rightBtn = document.querySelector(
+        'button[name="result"][value="y"]'
+    );
+
+    if (
+        rightBtn &&
+        rightBtn.offsetParent !== null
+    ) {
+        buttons.push(rightBtn);
+    }
+
+    // WRONG
+    const wrongBtn = document.querySelector(
+        'button[name="result"][value="n"]'
+    );
+
+    if (
+        wrongBtn &&
+        wrongBtn.offsetParent !== null
+    ) {
+        buttons.push(wrongBtn);
+    }
+
+    // NEXT QUESTION
+    const nextBtn = document.getElementById(
+        "next-question-btn"
+    );
+
+    if (
+        nextBtn &&
+        nextBtn.offsetParent !== null
+    ) {
+        buttons.push(nextBtn);
+    }
+
+    return buttons;
+}
+
+function updateSelection() {
+
+    const buttons = getVisibleButtons();
+
+    // prevent overflow
+    if (
+        selectedIndex >= buttons.length
+    ) {
+        selectedIndex = 0;
+    }
+
+    buttons.forEach((btn, index) => {
+
+        if (index === selectedIndex) {
+
+            btn.style.outline =
+                "3px solid blue";
+
+            btn.focus();
+
+        } else {
+
+            btn.style.outline = "none";
+        }
+    });
+}
+
+document.addEventListener(
+    "keydown",
+    function(event) {
+
+        const buttons =
+            getVisibleButtons();
+
+        if (buttons.length === 0) {
+            return;
+        }
+
+        // RIGHT = next button
+        if (event.key === "ArrowRight") {
+
+            selectedIndex++;
+
+            if (
+                selectedIndex >=
+                buttons.length
+            ) {
+                selectedIndex = 0;
+            }
+
+            updateSelection();
+        }
+
+        // LEFT = previous button
+        if (event.key === "ArrowLeft") {
+
+            selectedIndex--;
+
+            if (selectedIndex < 0) {
+
+                selectedIndex =
+                    buttons.length - 1;
+            }
+
+            updateSelection();
+        }
+
+        // ENTER = click selected button
+        if (event.key === "Enter") {
+
+            buttons[selectedIndex].click();
+        }
+    }
+);
+
+window.onload = function() {
+
+    selectedIndex = 0;
+
+    updateSelection();
+};
+
+</script></body>
+</html>

@@ -1,0 +1,111 @@
+What is the mechanism used to intentionally slow down requests to protect a system from overload? $$$$$ Throttling
+What is the technique used to restrict how many requests a client can make in a time window? $$$$$ Rate limiting
+What is the ability of a system to execute multiple tasks simultaneously? $$$$$ Concurrency
+What is the technique where a system intentionally drops requests under heavy load to preserve stability? $$$$$ Load shedding
+What is the mechanism used to slow producers when consumers cannot keep up? $$$$$ Backpressure
+What is the pattern where multiple inputs are aggregated into a single system or service? $$$$$ fan in
+What is the pattern where one request or event is distributed to multiple downstream systems? $$$$$ fan out
+What are overloaded partitions caused by uneven traffic distribution called? $$$$$ Hot partitions
+What is a sudden spike in incoming requests or traffic called? $$$$$ burst traffic
+What is the latency experienced by the slowest percentage of requests (e.g. P99)? $$$$$ Tail latency
+What type of load balancer routes traffic using transport-layer information like IP and TCP ports? $$$$$ l4 LB
+What type of load balancer routes traffic using application-layer information like HTTP headers and URLs? $$$$$ l7 LB
+What is the networking technique where the same IP address is advertised from multiple geographic locations? $$$$$ anycast
+What is the routing strategy where traffic is directed based on geographic location? $$$$$ geo routing
+What is the routing mechanism where a user's requests are consistently sent to the same backend server? $$$$$ sticky ressions
+What is the mechanism used by services to dynamically locate other services in a distributed system? $$$$$ service discovery
+What is the periodic check used to determine whether a service or instance is healthy? $$$$$ health check
+What is the fault-tolerance pattern that stops requests to failing services to avoid cascading failures? $$$$$ cirtuit breaker
+What is the situation where excessive retries amplify system overload during failures? $$$$$ retry storm
+What is the graceful process of stopping new connections while allowing existing requests to complete? $$$$$ connection draining
+What is the distributed systems failure scenario where two nodes incorrectly believe they are both leaders? $$$$$ split brain
+What is the process of selecting a coordinator or primary node in a distributed system? $$$$$ leader election
+What is the process by which distributed nodes agree on a single value or decision? $$$$$ consensus
+What is the minimum number of nodes required to agree on an operation in distributed systems? $$$$$ quorum
+What is the difference in time between clocks on different machines in a distributed system called? $$$$$ clock skew
+What is the practice of monitoring, tracing, and understanding system behavior through metrics, logs, and traces? $$$$$ observability
+What is the scope of impact caused by a system failure or bad deployment? $$$$$ blast radius
+What is the process of loading historical or missed data into a system after recovery or migration? $$$$$ backfill
+What is the latency experienced when a service or container starts for the first time? $$$$$ cold start
+What is the property where repeated identical requests produce the same result without unintended side effects? $$$$$ idempotent
+What is the technique where data or resources are loaded only when actually needed? $$$$$ lazy loading
+What is the deployment strategy where two identical production environments exist and traffic switches between them? $$$$$ blue green deployment
+What is the deployment strategy where a small subset of users receives the new version before full rollout? $$$$$ canary deployment
+What is the deployment strategy where instances are gradually updated in batches instead of all at once? $$$$$ rolling deployment
+What is the strategy and process for restoring systems after major outages or catastrophic failures? $$$$$ disaster recovery
+What is the number of copies of data maintained across distributed storage systems called? $$$$$ replication factor
+What is the storage architecture where data is moved across different storage classes based on access frequency? $$$$$ tiered storage
+What is the low-cost storage used for infrequently accessed data called? $$$$$ cold storage
+What is the situation where excessive monitoring alerts reduce engineers' responsiveness to real incidents? $$$$$ alert fatigue
+What is the retry strategy where delays increase exponentially between retry attempts? $$$$$ retry with exponentialbackoff
+What is the random delay added to retries to avoid synchronized retry spikes? $$$$$ jitter
+What is the situation where many clients simultaneously retry requests and overload the system again? $$$$$ thunderherd
+What is the failure pattern where one system failure propagates and causes additional downstream failures? $$$$$ cascading failure
+What is the queue used to store messages that cannot be processed successfully after repeated retries? $$$$$ dead letter queue
+What is the cache located geographically closer to users to reduce latency called? $$$$$ edge cache
+What is the globally distributed network used to cache and deliver content closer to users? $$$$$ cdn
+What is the policy used to decide which items to remove from cache when it becomes full? $$$$$ eviction policy
+What is the process of preloading frequently accessed data into cache before traffic arrives? $$$$$ cache warming
+What is the phenomenon where many requests simultaneously regenerate missing cached data? $$$$$ dogpiling effect
+What is the situation where many clients simultaneously miss cache and overload the backend system? $$$$$ cache stampede
+What is the sequential log used to persist changes before applying them to the database called? $$$$$ write ahead log
+What is the consistency model where all clients always see the latest committed write immediately? $$$$$ Strict Consistency
+What is the consistency model where all operations appear globally ordered and immediately visible? $$$$$ Strong Consistency
+What is the consistency model where all processes see operations in the same order, but not necessarily real-time order? $$$$$ Sequential Consistency
+What is the consistency model where causally related operations are observed in the same order by all nodes? $$$$$ Causal Consistency
+What is the consistency model where there are minimal guarantees about when updates become visible? $$$$$ Weak Consistency
+What is the consistency model where replicas eventually converge to the same value if no new updates occur? $$$$$ Eventual Consistency
+What is the consistency model where a client maintains a consistent view within a single session? $$$$$ Session Consistency
+What is the approximate latency of an L1 cache reference?$$$$$0.5 ns
+What is the approximate latency caused by a branch mispredict?$$$$$5 ns
+What is the approximate latency of an L2 cache reference?$$$$$7 ns
+What is the approximate latency of a mutex lock/unlock operation?$$$$$100 ns
+What is the approximate latency of a main memory reference?$$$$$100 ns
+What is the approximate latency to compress 1 KB with Zippy?$$$$$10,000 ns
+What is the approximate latency to send 2 KB over a 1 Gbps network?$$$$$20,000 ns
+What is the approximate latency to read 1 MB sequentially from memory?$$$$$250,000 ns
+What is the approximate round trip latency within the same datacenter?$$$$$500,000 ns
+What is the approximate latency of a disk seek?$$$$$10,000,000 ns
+What is the approximate latency to read 1 MB sequentially from network?$$$$$10,000,000 ns
+What is the approximate latency to read 1 MB sequentially from disk?$$$$$30,000,000 ns
+What is the approximate latency to send a packet from California to Netherlands and back to California?$$$$$150,000,000 ns
+Areas where there is very high demand $$$$$ hotspot areas
+Why data like userId, timestamps, or even fareEstimate in the body or query parameters is bad? $$$$$ you can't trust any data sent from the client as it can be easily manipulated. User data should always be passed in the session or JWT, while timestamps should be generated by the server. Data like fareEstimate should be retrieved from the database and never passed in by the client.
+throttling vs load shedding vs rate limiting vs backoff vs backpressure vs circuit breaker $$$$$ Done
+Whatsapp req
+$$$$$
+add/remove participants in chat
+send media attachments with msg
+end-to-end encryption
+receive realtime messages
+receive offline messages
+fetch chat history
+support multi-device access
+message ordering per chat
+Exactly once message received by receiver
+<200ms message latency (for realtime when user online)
+
+How websocket works?
+$$$$$
+In a distributed websocket architecture, there are multiple websocket gateway servers, each maintaining a subset of active websocket connections. When a client connects through the load balancer, it gets attached to one websocket gateway, which keeps the long-lived TCP/websocket connection open. The system stores a mapping like (userId, deviceId) -> websocketGateway in a Presence KV store such as Redis. When a message needs to be delivered, the Fanout Service first looks up which websocket gateways currently own the recipient’s active connections, then routes the message to those gateways. The gateways finally push the message over their existing websocket connections to the client devices. This design allows websocket handling to scale horizontally across many gateway servers while still supporting realtime low-latency delivery and multi-device fanout.
+Note that the user,device: server mapping is only needed to fan-out msg to diff WS. If it was a single WS conn where a user uses a WB to send a msg, then LB already has the info and routes to the right WS gateway.
+
+How is exactly once processing achieved $$$$$ By using atleast once + idenpotency key
+Fanout-on-read vs fanout-on-write $$$$$ fanout on write has simple read by high write latency and vice versa. Hybrid is a choice i.e. when a msg is sent to lots of users, do fan out on read otherwise fan out on write
+How E2EE works in group chat that involves blob store for attachments
+$$$$$
+When a user sends a media attachment in an end-to-end encrypted chat system, the client first generates a random symmetric mediaKey and uses it to encrypt the attachment locally before uploading it to blob storage. Since the blob store only sees encrypted bytes and does not possess the mediaKey, it cannot access the actual media contents. The blob store URL is included as part of the encrypted message metadata.
+For the actual chat message, the sender generates another symmetric key called msgKey and encrypts the message payload using it. The payload may include text, media metadata, blob URLs, and the mediaKey itself. In group chats, the system does not encrypt the entire message separately using every participant’s public key because that would be computationally expensive. Instead, the msgKey is encrypted separately for each recipient device using that device’s public key and attached to the message. Each recipient uses their private key to decrypt the msgKey, then uses the msgKey to decrypt the message payload, retrieve the mediaKey and blob URL, download the encrypted media from blob storage, and finally decrypt the media locally using the mediaKey.
+
+Why cross region sync db is not recommended? $$$$$ Because India <-> US roundtrip is 300ms. So, latency will be high.
+Why is cursor better than pagenation at scale? $$$$$ Because at scale/distributed acursor will point to last used but offset/page will not so if there is a insert prior to the last seen then pagination will duplicate shown data
+Should chatting app be multiregion? $$$$$ yes
+
+
+
+
+
+
+
+
+

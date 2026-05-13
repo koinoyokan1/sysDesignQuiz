@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+    <title>All Questions</title>
+
+    <link rel="stylesheet"
+          href="/static/style.css">
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>All Questions & Answers</h1>
+
+    <a href="/quiz">
+        Back To Quiz
+    </a>
+
+    <br><br>
+
+    {% for item in qa_list %}
+
+        <div class="question-box">
+
+            <h3>
+                Question {{ loop.index }}
+            </h3>
+
+                <p style="white-space: pre-wrap;">
+                {{ item.question }}
+            </p>
+
+            <h4>
+                Answer
+            </h4>
+
+                <p style="white-space: pre-wrap;">
+                {{ item.answer }}
+            </p>
+
+        </div>
+
+        <br>
+
+    {% endfor %}
+
+</div>
+
+</body>
+</html>
