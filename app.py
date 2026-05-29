@@ -16,9 +16,9 @@ app = Flask(__name__)
 
 app.secret_key = "super-secret-key"
 
-# -----------------------------------------
+# ---------------------------------------------------
 # SERVER SIDE SESSION STORAGE
-# -----------------------------------------
+# ---------------------------------------------------
 
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["SESSION_PERMANENT"] = False
@@ -79,7 +79,7 @@ def load_questions(filename):
 
             # ---------------------------------
             # OLD FORMAT
-            # question $$$$$ answer
+            # question$$$$$answer
             # ---------------------------------
 
             if "$$$$$" in line:
@@ -125,7 +125,7 @@ def load_questions(filename):
 
                 current = lines[i]
 
-                # blank line ends multiline answer
+                # blank line ends answer
                 if not current.strip():
                     break
 
@@ -183,8 +183,6 @@ def all_questions():
 
     questions = load_questions(filename)
 
-    random.shuffle(questions)
-
     for q in questions:
 
         qa_list.append({
@@ -201,13 +199,36 @@ def all_questions():
 # ---------------------------------------------------
 # Start Quiz
 # ---------------------------------------------------
+@app.route("/reset", methods=["POST"])
+def reset_quiz():
+
+    filename = session.get("filename")
+
+    if not filename:
+        return redirect(url_for("index"))
+
+    # reload fresh questions
+    questions = load_questions(filename)
+
+    progress = {}
+
+    for idx, q in enumerate(questions):
+        progress[str(idx)] = {
+            "first_attempt_done": False,
+            "mastered": False,
+            "consecutive_correct": 0
+        }
+
+    session["progress"] = progress
+    session["question_order"] = questions
+    session["current_index"] = 0
+
+    return redirect(url_for("quiz"))
 
 @app.route("/start/<path:filename>")
 def start_quiz(filename):
 
     questions = load_questions(filename)
-
-    random.shuffle(questions)
 
     progress = {}
 
@@ -219,7 +240,6 @@ def start_quiz(filename):
             "consecutive_correct": 0
         }
 
-    # store lightweight session data
     session["filename"] = filename
     session["progress"] = progress
     session["question_order"] = questions
@@ -241,6 +261,7 @@ def quiz():
         return redirect(url_for("index"))
 
     questions = session.get("question_order", [])
+    random.shuffle(questions)
 
     progress = session.get("progress", {})
 
@@ -249,7 +270,10 @@ def quiz():
     if not questions:
         return redirect(url_for("index"))
 
-    # Filter non-mastered questions
+    # ---------------------------------
+    # ONLY NON MASTERED QUESTIONS
+    # ---------------------------------
+
     remaining_questions = []
 
     for idx, q in enumerate(questions):
@@ -264,7 +288,7 @@ def quiz():
     if not remaining_questions:
         return redirect(url_for("result"))
 
-    # Reset index if needed
+    # reset loop
     if current_index >= len(remaining_questions):
         current_index = 0
 
@@ -275,22 +299,32 @@ def quiz():
     current_question = current["question"]
 
     question_text = current_question["question"]
+
     answer_text = current_question["answer"]
 
     state = progress[q_idx]
 
     message = ""
 
+    # ---------------------------------
+    # POST
+    # ---------------------------------
+
     if request.method == "POST":
 
         result = request.form.get("result")
 
-        # FIRST ATTEMPT
-        if not state["first_attempt_done"]:
+        # ---------------------------------
+        # CORRECT
+        # ---------------------------------
 
-            state["first_attempt_done"] = True
+        if result == "y":
 
-            if result == "y":
+            # first correct immediately masters
+
+            if not state["first_attempt_done"]:
+
+                state["first_attempt_done"] = True
 
                 state["mastered"] = True
 
@@ -299,16 +333,6 @@ def quiz():
                 )
 
             else:
-
-                state["consecutive_correct"] = 0
-
-                message = (
-                    "❌ Need 2 consecutive correct answers."
-                )
-
-        else:
-
-            if result == "y":
 
                 state["consecutive_correct"] += 1
 
@@ -330,16 +354,27 @@ def quiz():
                         f"Good! Need {remaining} more consecutive correct."
                     )
 
-            else:
+        # ---------------------------------
+        # WRONG
+        # ---------------------------------
 
-                state["consecutive_correct"] = 0
+        else:
 
-                message = (
-                    "❌ Streak reset. Need 2 consecutive correct answers."
-                )
+            if not state["first_attempt_done"]:
+
+                state["first_attempt_done"] = True
+
+            state["consecutive_correct"] = 0
+
+            message = (
+                "❌ Streak reset. Need 2 consecutive correct answers."
+            )
 
         session["progress"] = progress
-        session["current_index"] = current_index + 1
+
+        session["current_index"] = (
+            current_index + 1
+        )
 
         return render_template(
             "quiz.html",
@@ -353,6 +388,10 @@ def quiz():
             ),
             total_count=len(questions)
         )
+
+    # ---------------------------------
+    # GET
+    # ---------------------------------
 
     return render_template(
         "quiz.html",
@@ -389,7 +428,7 @@ def result():
 
 
 # ---------------------------------------------------
-# Main
+# MAIN
 # ---------------------------------------------------
 
 if __name__ == "__main__":

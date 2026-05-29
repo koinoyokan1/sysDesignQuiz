@@ -1,0 +1,13 @@
+What is the approximate latency of an L1 cache reference?$$$$$0.5 ns
+What is the approximate latency caused by a branch mispredict?$$$$$5 ns
+What is the approximate latency of an L2 cache reference?$$$$$7 ns
+What is the approximate latency of a mutex lock/unlock operation?$$$$$100 ns
+What is the approximate latency of a main memory reference?$$$$$100 ns
+What is the approximate latency to compress 1 KB with Zippy?$$$$$10,000 ns
+What is the approximate latency to send 2 KB over a 1 Gbps network?$$$$$20,000 ns
+What is the approximate latency to read 1 MB sequentially from memory?$$$$$250,000 ns
+What is the approximate round trip latency within the same datacenter?$$$$$500,000 ns
+What is the approximate latency of a disk seek?$$$$$10,000,000 ns
+What is the approximate latency to read 1 MB sequentially from network?$$$$$10,000,000 ns
+What is the approximate latency to read 1 MB sequentially from disk?$$$$$30,000,000 ns
+What is the approximate latency to send a packet from California to Netherlands and back to California?$$$$$150,000,000 ns

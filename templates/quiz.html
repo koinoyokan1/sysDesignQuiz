@@ -2,8 +2,13 @@
 <html>
 
 <head>
+
     <title>Quiz</title>
-    <link rel="stylesheet" href="/static/style.css">
+
+    <link
+        rel="stylesheet"
+        href="/static/style.css">
+
 </head>
 
 <body>
@@ -13,35 +18,58 @@
     <h1>Quiz</h1>
 
     <div class="progress">
-        Mastered: {{ mastered_count }}/{{ total_count }}
+
+        Mastered:
+        {{ mastered_count }}/{{ total_count }}
+
     </div>
 
     <div class="question-box">
 
         <h2>Question</h2>
 
-        <p style="white-space: pre-wrap;">{{ question }}</p>
+        <p style="white-space: pre-wrap;">
+            {{ question }}
+        </p>
 
         {% if not show_answer %}
 
-            <button onclick="showAnswer()">
+            <button
+                id="show-answer-btn"
+                onclick="showAnswer()">
+
                 Show Answer
+
             </button>
 
-            <div id="answer-section" style="display:none;">
+            <div
+                id="answer-section"
+                style="display:none;">
 
                 <h3>Answer</h3>
 
-                <p style="white-space: pre-wrap;">{{ answer }}</p>
+                <p style="white-space: pre-wrap;">
+                    {{ answer }}
+                </p>
 
                 <form method="POST">
 
-                    <button name="result" value="y">
+                    <button
+                        id="yes-btn"
+                        name="result"
+                        value="y">
+
                         I Got It Right
+
                     </button>
 
-                    <button name="result" value="n">
+                    <button
+                        id="no-btn"
+                        name="result"
+                        value="n">
+
                         I Got It Wrong
+
                     </button>
 
                 </form>
@@ -52,32 +80,76 @@
 
             <h3>Answer</h3>
 
-            <p style="white-space: pre-wrap;">{{ answer }}</p>
+            <p style="white-space: pre-wrap;">
+                {{ answer }}
+            </p>
 
             <div class="message">
+
                 {{ message }}
+
             </div>
 
             <br>
 
-<button id="next-question-btn"
-        onclick="window.location.href='/quiz'">
-    Next Question
-</button>
+            <button
+                id="next-question-btn"
+                onclick="window.location.href='/quiz'">
+
+                Next Question
+
+            </button>
 
         {% endif %}
 
     </div>
-
-<button
-    onclick="window.location.href='/all'">
-
-    View All Questions
-
-</button>
+<div class="scratchpad">
+    <h3>Scratchpad</h3>
+    <textarea
+        id="scratchpad"
+        placeholder="Write your notes here..."
+        style="
+            width: 100%;
+            height: 150px;
+            padding: 10px;
+            font-size: 14px;
+            resize: vertical;
+        "
+    ></textarea>
 </div>
-    
+    <button
+        id="all-questions-btn"
+        onclick="window.location.href='/all'">
+
+        View All Questions
+
+    </button>
+<form method="POST" action="/reset" style="margin-top:10px;">
+    <button
+        type="submit"
+        style="background:red;color:white;padding:8px 12px;border:none;cursor:pointer;">
+        Reset Progress
+    </button>
+</form>
+</div>
+
 <script>
+function isTypingInInput() {
+    const el = document.activeElement;
+    if (!el) return false;
+
+    return (
+        el.tagName === "TEXTAREA" ||
+        el.tagName === "INPUT" ||
+        el.isContentEditable
+    );
+}
+let selectedIndex = 0;
+
+
+// ---------------------------------------------------
+// SHOW ANSWER
+// ---------------------------------------------------
 
 function showAnswer() {
 
@@ -85,77 +157,68 @@ function showAnswer() {
         "answer-section"
     ).style.display = "block";
 
-    selectedIndex = 0;
+    selectedIndex = 1;
 
     updateSelection();
 }
 
-let selectedIndex = 0;
+
+// ---------------------------------------------------
+// GET BUTTONS
+// ---------------------------------------------------
 
 function getVisibleButtons() {
 
     const buttons = [];
 
-    // SHOW ANSWER
-    const showBtn = document.querySelector(
-        'button[onclick="showAnswer()"]'
-    );
+    const ids = [
+        "show-answer-btn",
+        "yes-btn",
+        "no-btn",
+        "next-question-btn",
+        "all-questions-btn"
+    ];
 
-    if (
-        showBtn &&
-        showBtn.offsetParent !== null
-    ) {
-        buttons.push(showBtn);
-    }
+    ids.forEach(id => {
 
-    // RIGHT
-    const rightBtn = document.querySelector(
-        'button[name="result"][value="y"]'
-    );
+        const btn =
+            document.getElementById(id);
 
-    if (
-        rightBtn &&
-        rightBtn.offsetParent !== null
-    ) {
-        buttons.push(rightBtn);
-    }
-
-    // WRONG
-    const wrongBtn = document.querySelector(
-        'button[name="result"][value="n"]'
-    );
-
-    if (
-        wrongBtn &&
-        wrongBtn.offsetParent !== null
-    ) {
-        buttons.push(wrongBtn);
-    }
-
-    // NEXT QUESTION
-    const nextBtn = document.getElementById(
-        "next-question-btn"
-    );
-
-    if (
-        nextBtn &&
-        nextBtn.offsetParent !== null
-    ) {
-        buttons.push(nextBtn);
-    }
+        if (
+            btn &&
+            btn.offsetParent !== null
+        ) {
+            buttons.push(btn);
+        }
+    });
 
     return buttons;
 }
 
+
+// ---------------------------------------------------
+// UPDATE SELECTION
+// ---------------------------------------------------
+
 function updateSelection() {
 
-    const buttons = getVisibleButtons();
+    const buttons =
+        getVisibleButtons();
 
-    // prevent overflow
+    if (buttons.length === 0) {
+        return;
+    }
+
     if (
         selectedIndex >= buttons.length
     ) {
         selectedIndex = 0;
+    }
+
+    if (selectedIndex < 0) {
+
+        selectedIndex =
+            buttons.length - 1;
     }
 
     buttons.forEach((btn, index) => {
@@ -169,58 +232,189 @@ function updateSelection() {
 
         } else {
 
-            btn.style.outline = "none";
+            btn.style.outline =
+                "none";
         }
     });
 }
 
+
+// ---------------------------------------------------
+// KEYBOARD CONTROLS
+// ---------------------------------------------------
+
 document.addEventListener(
     "keydown",
     function(event) {
+        if (isTypingInInput()) {
+            return;
+        }
+        const showBtn =
+            document.getElementById(
+                "show-answer-btn"
+            );
 
-        const buttons =
-            getVisibleButtons();
+        const yesBtn =
+            document.getElementById(
+                "yes-btn"
+            );
 
-        if (buttons.length === 0) {
+        const noBtn =
+            document.getElementById(
+                "no-btn"
+            );
+
+        const nextBtn =
+            document.getElementById(
+                "next-question-btn"
+            );
+
+        // ---------------------------------
+        // SPACE
+        // SHOW ANSWER
+        // ---------------------------------
+
+        if (
+            event.code === "Space"
+        ) {
+
+            if (
+                showBtn &&
+                showBtn.offsetParent !== null
+            ) {
+
+                event.preventDefault();
+
+                showBtn.click();
+            }
+
             return;
         }
 
-        // RIGHT = next button
-        if (event.key === "ArrowRight") {
+        // ---------------------------------
+        // RIGHT ARROW
+        // ---------------------------------
+
+// ---------------------------------
+// RIGHT ARROW
+// ---------------------------------
+
+if (
+    event.key === "ArrowRight"
+) {
+
+    event.preventDefault();
+
+    // STEP 1
+    // if show answer button visible
+    // show answer first
+
+    if (
+        showBtn &&
+        showBtn.offsetParent !== null
+    ) {
+
+        showBtn.click();
+        return;
+    }
+
+    // STEP 2
+    // if answer visible
+    // mark correct
+
+    if (
+        yesBtn &&
+        yesBtn.offsetParent !== null
+    ) {
+
+        yesBtn.click();
+        return;
+    }
+
+    // STEP 3
+    // next question screen
+
+    if (
+        nextBtn &&
+        nextBtn.offsetParent !== null
+    ) {
+
+        nextBtn.click();
+        return;
+    }
+}
+
+        // ---------------------------------
+        // LEFT ARROW
+        // ---------------------------------
+
+        if (
+            event.key === "ArrowLeft"
+        ) {
+
+            event.preventDefault();
+
+            if (
+                noBtn &&
+                noBtn.offsetParent !== null
+            ) {
+
+                noBtn.click();
+                return;
+            }
+        }
+
+        // ---------------------------------
+        // TAB STYLE NAVIGATION
+        // ---------------------------------
+
+        if (
+            event.key === "ArrowDown"
+        ) {
 
             selectedIndex++;
 
-            if (
-                selectedIndex >=
-                buttons.length
-            ) {
-                selectedIndex = 0;
-            }
-
             updateSelection();
         }
 
-        // LEFT = previous button
-        if (event.key === "ArrowLeft") {
+        if (
+            event.key === "ArrowUp"
+        ) {
 
             selectedIndex--;
 
-            if (selectedIndex < 0) {
-
-                selectedIndex =
-                    buttons.length - 1;
-            }
-
             updateSelection();
         }
 
-        // ENTER = click selected button
-        if (event.key === "Enter") {
+        // ---------------------------------
+        // ENTER
+        // ---------------------------------
 
-            buttons[selectedIndex].click();
+        if (
+            event.key === "Enter"
+        ) {
+
+            event.preventDefault();
+
+            const buttons =
+                getVisibleButtons();
+
+            if (
+                buttons.length > 0
+            ) {
+
+                buttons[
+                    selectedIndex
+                ].click();
+            }
         }
     }
 );
+
+
+// ---------------------------------------------------
+// INITIAL LOAD
+// ---------------------------------------------------
 
 window.onload = function() {
 
@@ -229,5 +423,6 @@ window.onload = function() {
     updateSelection();
 };
 
-</script></body>
+</script>
+</body>
 </html>
