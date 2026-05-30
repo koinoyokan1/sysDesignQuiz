@@ -1,0 +1,225 @@
+What are the main write modes in distributed systems?
+$$$$$
+Single leader (no replica, async, semi-sync, sync), Chain Replication, Multi-leader, CRDT, Leaderless Quorum, Sloppy Quorum + Hinted Handoff, Consensus (Raft/Paxos), 2PC, 3PC
+
+What is the difference between consistency and durability?
+$$$$$
+Consistency = all nodes see the same data at the same time. Durability = once a write is acked, it survives crashes. A system can be durable but inconsistent (async replication acks after leader write, data is durable on leader but replicas are stale).
+
+What does W+R>N guarantee in leaderless quorum?
+$$$$$
+That at least one node in every read set overlaps with every write set, so you always read the latest write. E.g. N=3, W=2, R=2 means read and write sets always share at least 1 node.
+
+What is the difference between quorum and consensus?
+$$$$$
+Quorum just needs W nodes to ack independently, no coordination between them. Consensus (Raft/Paxos) requires nodes to actively agree via rounds of voting, producing a totally ordered log. Consensus is stronger and slower.
+
+What is sloppy quorum and when do you use it?
+$$$$$
+If the target N nodes are unavailable, writes go to other available nodes temporarily with a hint to deliver later (hinted handoff). Use when availability > consistency, e.g. DynamoDB during network partition. Risk: hint may never be delivered.
+
+What is hinted handoff?
+$$$$$
+When a node holds a write on behalf of a down node, it stores a hint. When the target node recovers, the hint is replayed to it. This restores consistency after the partition heals but does not guarantee it during the partition.
+
+What is the difference between 2PC and Consensus?
+$$$$$
+2PC is about atomicity across shards (all nodes commit or all abort). Consensus is about agreement on a single value across replicas. 2PC has a coordinator SPOF and can block if coordinator crashes. Consensus is leaderless and non-blocking. Spanner uses both together: Paxos for replication, 2PC for cross-shard transactions.
+
+What is the main failure mode of 2PC?
+$$$$$
+If the coordinator crashes after sending prepare but before sending commit, all participants are left blocked holding locks indefinitely. This is why 3PC was invented, though it still fails under network partitions.
+
+What does 3PC fix over 2PC and why is it rarely used?
+$$$$$
+3PC adds a pre-commit phase so participants can proceed even if coordinator crashes, making it non-blocking. Rarely used because it still fails under network partitions and adds latency. Most systems use Paxos/Raft instead for stronger guarantees.
+
+What is chain replication and how does it differ from sync replication?
+$$$$$
+In chain replication nodes are arranged Head -> Middle -> Tail. Writes go to Head and propagate down. Ack only sent when Tail receives it. Reads always from Tail. In sync replication, leader writes to all replicas in parallel and waits for all acks. Chain gives stronger read consistency (Tail always has committed data) and better write throughput via pipelining.
+
+What is CRDT and how is it different from multi-leader?
+$$$$$
+CRDT (Conflict-free Replicated Data Type) uses a data structure that guarantees concurrent writes can always be merged deterministically without conflicts. Multi-leader also allows concurrent writes but requires explicit conflict resolution logic (LWW, app-level merge). CRDT has no conflicts by mathematical design; multi-leader has conflicts by nature.
+
+What are examples of CRDTs?
+$$$$$
+G-Counter (grow only counter), PN-Counter (increment and decrement), LWW-Register (last write wins register), OR-Set (add and remove set), MV-Register (multi-value register). Used in Redis cluster, Riak, collaborative editing.
+
+What is the CAP theorem and what does it mean practically?
+$$$$$
+A distributed system can only guarantee 2 of 3: Consistency (all nodes see same data), Availability (every request gets a response), Partition Tolerance (system works despite network splits). Since partitions always happen in real networks, the real choice is CP (consistency over availability) vs AP (availability over consistency) during a partition.
+
+Which write modes are CP and which are AP?
+$$$$$
+CP: Consensus, 2PC, Single leader sync, Chain Replication.
+AP: CRDT, Sloppy Quorum, Multi-leader, Single leader async.
+Tunable: Leaderless quorum (depends on W and R values).
+
+What is eventual consistency?
+$$$$$
+If no new writes happen, all replicas will eventually converge to the same value. Does not say how long it takes. Used in async replication, leaderless quorum with low W, CRDT, sloppy quorum. Risk: reads can return stale data during convergence window.
+
+What is strong consistency?
+$$$$$
+Every read reflects the most recent write, regardless of which node you read from. Achieved by: single leader sync replication, chain replication (reads from tail), consensus-based systems. Cost: higher latency, lower availability.
+
+What is linearizability?
+$$$$$
+Strongest consistency model. Every operation appears to take effect atomically at a single point in time between its start and end. All clients see operations in the same order. Achieved by Raft/Paxos based systems. Spanner achieves this globally using TrueTime.
+
+What is sequential consistency vs linearizability?
+$$$$$
+Sequential consistency: all nodes see operations in the same order, but that order does not have to match real time. Linearizability: same order AND must match real wall-clock time. Linearizability is stronger. Example: if write completes at T=10, a read starting at T=11 must see it in linearizable systems but not necessarily in sequential.
+
+What is read-your-writes consistency?
+$$$$$
+After a client writes a value, it will always see that value in subsequent reads, even if other clients see stale data. Weaker than strong consistency. Achieved by routing a client's reads to the same replica it wrote to, or by tracking a write timestamp and waiting for replica to catch up.
+
+What is monotonic read consistency?
+$$$$$
+If a client reads a value at time T, it will never read an older value in subsequent reads. Prevents going back in time. Achieved by pinning a client to the same replica for all reads in a session.
+
+What is causal consistency?
+$$$$$
+Operations that are causally related are seen in the same order by all nodes. Concurrent (causally unrelated) operations can be seen in different orders. Stronger than eventual, weaker than linearizable. Used in: MongoDB causal sessions, some CRDT systems. Vector clocks are used to track causality.
+
+What are vector clocks and what problem do they solve?
+$$$$$
+Vector clocks assign a logical timestamp per node to each write, tracking which writes causally precede others. Solves the problem of determining if two writes are causally related or concurrent. If A's vector clock is strictly less than B's, A happened before B. If neither dominates, they are concurrent and may conflict.
+
+What is the difference between a leader election and consensus?
+$$$$$
+Leader election is a specific application of consensus: nodes use consensus to agree on which node is the leader. Consensus is the general problem of agreeing on any value. Raft uses consensus to elect a leader and then uses that leader to run further consensus rounds for log replication.
+
+How does Raft achieve consensus?
+$$$$$
+Nodes are in one of three states: follower, candidate, leader. Leader sends heartbeats. If follower times out, it becomes candidate and requests votes. Node wins if it gets majority votes. Leader then handles all writes, replicates to followers, commits when majority ack. If leader dies, new election starts.
+
+What is the split brain problem?
+$$$$$
+Two nodes both believe they are the leader simultaneously, causing conflicting writes. Happens when a network partition makes nodes unable to communicate. Prevented by requiring majority quorum for any operation, so only one partition can have a leader (the one with majority nodes).
+
+What is fencing and why is it needed?
+$$$$$
+Even with leader election, a slow old leader may still try to write after a new leader is elected (due to GC pauses, slow network). Fencing gives each leader a monotonically increasing token. Storage nodes reject writes from leaders with an old token. Prevents split brain writes from reaching storage.
+
+What is the difference between sync and async replication in terms of failover?
+$$$$$
+Async replication: if leader crashes, promoted replica may be missing recent writes (replication lag). Data loss possible. Sync replication: all replicas are up to date before ack, so no data loss on failover. But if a sync replica is down, writes stall.
+
+What is semi-sync replication?
+$$$$$
+Leader waits for at least one replica to ack before confirming write to client. Rest of replicas replicate asynchronously. Balances durability (at least 2 copies exist) with availability (only 1 replica needs to be up). Default mode in MySQL.
+
+How does Spanner achieve globally consistent reads without locking?
+$$$$$
+Spanner uses TrueTime API which gives a time interval [earliest, latest] with bounded uncertainty (~7ms). Before committing a write, Spanner waits out the uncertainty window. This guarantees that if transaction T1 commits before T2 starts in real time, T1's timestamp is strictly less than T2's, enabling globally consistent snapshot reads.
+
+What is a write-ahead log and why is it important?
+$$$$$
+WAL records every intended write to disk before applying it to the data structure. If the node crashes mid-write, it replays the WAL on recovery to reach a consistent state. Also used for replication: WAL is shipped to replicas who replay it. Used in Postgres, MySQL, RocksDB.
+
+When would you choose leaderless quorum over single leader?
+$$$$$
+Leaderless quorum when: you need high availability across multiple datacenters, can tolerate eventual consistency, want no single point of failure, need tunable consistency per operation. Single leader when: you need strong consistency, simpler conflict handling, and can tolerate leader being a bottleneck.
+
+When would you use multi-leader replication?
+$$$$$
+Multi-region active-active deployments where users write to their local region and low write latency is critical. Offline clients that need to write locally and sync later. Collaborative apps where conflict resolution is handled at app level. Cost: conflict resolution complexity.
+
+What is the difference between durability and availability?
+$$$$$
+Durability: a committed write survives node crashes (written to disk or multiple nodes). Availability: the system responds to requests even during failures. A system can have high durability but low availability (single leader sync — durable but unavailable if leader dies) or high availability but low durability (sloppy quorum — always responds but may lose hints).
+
+What consistency does Cassandra provide by default?
+$$$$$
+Eventual consistency by default (W=1, R=1). Can be tuned to strong consistency by setting W + R > N (e.g. W=2, R=2, N=3). QUORUM setting sets W and R to majority automatically. LOCAL_QUORUM restricts quorum to local datacenter for lower latency in multi-region setups.
+
+What consistency does DynamoDB provide?
+$$$$$
+Eventually consistent reads by default. Strongly consistent reads available on request (reads from leader only, higher latency, counts double against read capacity). Uses sloppy quorum internally with hinted handoff for high availability.
+
+What is the replication factor and how does it interact with quorum?
+$$$$$
+Replication factor N = number of copies of each piece of data. Quorum requires W + R > N. Higher N gives more fault tolerance but more storage cost. Typical: N=3, W=2, R=2. Can tolerate 1 node failure for both reads and writes. N=5, W=3, R=3 tolerates 2 node failures.
+
+Your distributed database is seeing stale reads even though you set W=2 R=2 N=3. What could cause this and how do you fix it?
+$$$$$
+Sloppy quorum may be enabled — writes went to substitute nodes, not the original N nodes, so R=2 reads from original nodes miss the write. Fix: disable sloppy quorum or use strong consistency reads routed to nodes that received the write. Also check if hinted handoff has not yet replayed to original nodes.
+
+You are designing a system where a user updates their profile and immediately reads it back but sees the old value. Which consistency model is violated and how do you fix it?
+$$$$$
+Read-your-writes consistency is violated. Fixes: route all reads for a user to the same replica they wrote to, or track the write timestamp and block reads until the replica's replication lag catches up to that timestamp, or use sync replication so all replicas are updated before ack.
+
+You have a leaderless quorum with N=3 W=2 R=2. Two clients simultaneously write different values to the same key on different nodes. What happens and how does the system resolve it?
+$$$$$
+Both writes succeed (each gets 2 acks). Now the key has two conflicting versions on different nodes. On next read, the system returns both versions (siblings). Resolution options: Last Write Wins using timestamps (risk: clock skew causes data loss), vector clocks to detect and surface conflict to application, CRDTs if data type supports it. Dynamo uses LWW by default, Riak exposed siblings to application.
+
+A Raft cluster has 5 nodes. The network partitions into groups of 3 and 2. What happens to each partition?
+$$$$$
+The partition with 3 nodes has majority quorum and can elect a leader and continue accepting writes. The partition with 2 nodes cannot reach majority, so it cannot elect a leader and rejects all writes, returning errors. When partition heals, the 2-node partition's leader (if it had one from before) steps down because it sees a higher term from the majority partition's leader. No split brain because only majority partition can commit.
+
+A Raft leader is in the middle of committing an entry when it crashes. The entry is on 2 of 5 nodes. What happens?
+$$$$$
+The entry is not committed (majority = 3 not reached). New leader election happens. The new leader may or may not have that entry. If the new leader does not have it, it will overwrite followers that do have it with its own log. The entry is lost. This is correct Raft behavior — only committed entries (majority acked) are guaranteed to survive. This is why clients should wait for commit confirmation before assuming success.
+
+You are using 2PC for a cross-shard transaction. The coordinator sends prepare to all shards, all say yes, then the coordinator crashes before sending commit. What happens and how do you recover?
+$$$$$
+All participant shards are stuck in prepared state, holding locks, waiting for commit or abort. They cannot proceed without coordinator decision. Recovery: use a replicated coordinator (backed by Raft/Paxos) so the new coordinator can look up the transaction log and determine it was in prepared state with all yes votes, then send commit. This is how Spanner handles it — Paxos group acts as coordinator so coordinator failure is recoverable.
+
+You have a multi-region active-active setup with multi-leader replication. User A in US and User B in EU simultaneously increment the same counter from 10. Both see 11. What is the correct value and how do you fix the data structure?
+$$$$$
+Correct value is 12 but both wrote 11. Last Write Wins would keep 11, losing one increment. Fix: use a CRDT PN-Counter where each node maintains its own increment count and the true value is the sum of all node counters. Merging is always additive so no increment is lost regardless of concurrency. This is why CRDTs are preferred over LWW for counters, votes, and any additive operation.
+
+Your system uses async replication. The leader crashes and you promote a replica. 500 writes that were in the replication lag are lost. How would you have designed the system to prevent this?
+$$$$$
+Options in increasing strength: semi-sync replication (wait for at least 1 replica ack before confirming to client, so at most 1 copy can be lost), sync replication to all replicas (no lag, but availability hit), use consensus-based replication (Raft) where write is only committed when majority nodes have it. Trade-off: each option increases write latency. For financial systems, semi-sync minimum, Raft preferred.
+
+You are building a distributed lock using Redis with a single node. What are the failure modes and how does Redlock fix them?
+$$$$$
+Single node: if Redis crashes after granting lock but before client releases it, lock is held until TTL expires. If Redis crashes and restarts without persistence, it forgets the lock and grants it to another client while first still holds it — two clients hold the lock simultaneously. Redlock: acquire lock on N independent Redis nodes (majority quorum). Lock is valid only if acquired on majority within validity time. If a node crashes, majority still holds. Still has issues: Martin Kleppmann showed clock drift and GC pauses can cause two clients to hold the lock; use fencing tokens for true safety.
+
+You need to build a system that guarantees exactly-once processing of payments even if the payment service crashes mid-processing. How do you design this?
+$$$$$
+Idempotency key: client generates a unique ID per payment and sends it with every retry. Server stores (idempotency_key, result) in a durable store before processing. On retry, if key exists return stored result without reprocessing. Two-phase approach: first write intent to WAL (payment pending), then process, then mark complete. On crash recovery, replay WAL to find pending payments and complete or roll back. Use 2PC if payment spans multiple services (debit account A, credit account B must be atomic).
+
+A client writes a value to a linearizable system and gets a success ack. Another client immediately reads the same key and gets the old value. Is this possible in a linearizable system?
+$$$$$
+No, this violates linearizability. In a linearizable system, once a write is acked, any subsequent read (by any client) must return that value or a newer one. If this is happening: the read is being served by a replica that has not yet received the write (read not going through leader), or the system is not truly linearizable despite claims. Fix: ensure all reads go through the leader or use lease-based reads where leader confirms it is still leader before serving read.
+
+You have a Cassandra cluster with N=3 W=1 R=1. How would an attacker or bug exploit this configuration and what is the blast radius?
+$$$$$
+W=1 R=1 with N=3 means W+R=2 which is less than N=3, so quorum is not satisfied. Reads and writes can go to completely different nodes with no overlap guarantee. A write to node A may never be seen by a read from node B until async replication catches up. Blast radius: any read can return stale data of arbitrary age if a node is lagging. A bug that causes one node to stop replicating means reads from that node return increasingly stale data silently with no error. Fix: minimum W=2 R=2 for any data requiring consistency.
+
+You are designing Google Docs collaborative editing. Two users simultaneously edit the same paragraph. How do you ensure both edits are preserved and the document converges to the same state on all clients?
+$$$$$
+Use Operational Transformation (OT) or CRDT. OT: transform each operation against concurrent operations before applying — if User A inserts at position 5 and User B deletes at position 3 simultaneously, A's operation must be transformed to insert at position 4 after B's delete is accounted for. Requires a central server to order operations (Google Docs uses this). CRDT: represent document as a sequence CRDT where each character has a globally unique position identifier — no transformation needed, merge is automatic. CRDTs work peer-to-peer without central server (used in Figma, some offline-first apps).
+
+Your distributed database uses vector clocks for conflict detection. After a network partition heals, you see two versions of a record with vector clocks [A:2, B:1] and [A:1, B:2]. What does this mean and how do you resolve it?
+$$$$$
+Neither vector clock dominates the other — they are concurrent writes that happened during the partition. [A:2, B:1] means node A processed 2 writes and node B processed 1 write for this record on one side. [A:1, B:2] on the other side. They diverged after the partition. Resolution options: LWW using physical timestamp (lossy), surface both versions to application as siblings and let application merge (Riak approach), use a CRDT that can merge automatically if the data type supports it.
+
+You are designing a system where users can transfer money between accounts. Accounts are sharded across 10 database nodes. How do you ensure transfers are atomic?
+$$$$$
+Use 2PC: debit source account on shard X (prepare — lock and reserve funds), credit destination account on shard Y (prepare — lock), coordinator sends commit to both. For coordinator fault tolerance, back the coordinator with a Raft group so its log survives crashes. Add idempotency keys on each shard so retried prepares do not double-debit. For cross-region, Spanner's approach: 2PC across shards, Paxos within each shard group for replication, TrueTime for global ordering.
+
+Your system needs to serve 1 million reads per second with strong consistency. A single leader cannot handle this throughput. How do you scale reads without sacrificing consistency?
+$$$$$
+Lease-based reads: leader grants read leases to followers for a bounded time period. Follower can serve strongly consistent reads during lease without contacting leader, because leader will not commit new writes without invalidating leases first. Used in Chubby and Spanner. Alternative: followers can serve reads if they confirm their log is up to date by checking with leader (read index in Raft — leader confirms its commit index, follower waits until it applies up to that index before serving read). Both approaches scale read throughput while maintaining linearizability.
+
+A node in your Raft cluster is repeatedly winning elections and immediately losing leadership. What is happening and how do you diagnose it?
+$$$$$
+Likely causes: the node has a very short election timeout causing it to time out and start elections before receiving heartbeats from a valid leader (misconfigured timeout), the node has network issues causing intermittent connectivity so it keeps thinking the leader is dead, or the node's log is so far behind that after winning election it immediately discovers it is missing entries and steps down. Diagnose by checking: election timeout vs heartbeat interval ratio (should be 10:1 minimum), network packet loss to this node, log replication lag metrics. Fix: increase election timeout, fix network, or exclude the node from voting until it catches up.
+
+You are building a feature flag system that must propagate flag changes to 10000 servers within 5 seconds globally. What consistency model do you use and how do you design the propagation?
+$$$$$
+Eventual consistency is acceptable here — a brief window where some servers have old flag value is tolerable for most feature flags. Design: store flags in a strongly consistent store (etcd/Zookeeper) as source of truth. Use a pub-sub fanout (Kafka or a gossip protocol) to propagate changes to all 10000 servers. Each server caches the flag locally and subscribes to updates. For the rare flag that requires strict consistency (e.g. kill switch for a dangerous feature), use a pull model where servers poll the consistent store directly and block requests until they see the updated flag.
+
+You have a distributed counter tracking ad impressions that receives 500000 writes per second. Using a single strongly consistent counter causes it to be a bottleneck. How do you redesign it?
+$$$$$
+Use a sharded counter: split counter into N shards (e.g. 100), each write goes to a random shard. Each shard is an independent strongly consistent counter. Total count = sum of all shards. Writes scale linearly with shards. For reads of total count, either sum all shards (eventual, may be slightly stale) or use a background job that periodically aggregates. Alternative: CRDT G-Counter where each node maintains its own local count and total is the sum — merges are conflict-free. Used in systems like Cassandra counters and Redis cluster counters.
+
+Your database uses logical clocks for ordering. Two events have the same logical timestamp. What does this mean and what problems can it cause?
+$$$$$
+Lamport clocks only guarantee: if A happened before B then timestamp(A) < timestamp(B). The converse is not true — same or equal timestamps do not mean events are concurrent, they could be from different nodes that have not communicated. Problems: LWW conflict resolution using Lamport timestamps can incorrectly discard a write that happened later in real time. Fix: use vector clocks which can distinguish concurrent from causally ordered events, or use hybrid logical clocks (HLC) which combine logical and physical time to get both causality tracking and approximate real-time ordering. Spanner uses TrueTime (physical) to avoid this entirely.
